@@ -85,14 +85,15 @@ dependencies {
         exclude group: 'org.apache.logging.log4j'
     }
 
-    'modRuntimeOnly'('curse.maven:ae2-223794:2747063')
+    // upstream runs dev against AE2; it crashes on Cleanroom (AppEng.<init> mismatch)
     modCompileOnly 'maven.modrinth:fluidlogged-api:3.0.6'
 }
 
+def modVersion = version
 processResources {
-    inputs.property 'version', version
+    inputs.property 'version', modVersion
     filesMatching('mcmod.info') {
-        expand 'version': version
+        expand 'version': modVersion
     }
     from(rootProject.file('modern/src/main/resources/icon.png'))
 }
@@ -135,10 +136,13 @@ tasks.withType(RunMinecraft).configureEach {
         workingDir(layout.projectDirectory.dir('run/cleanroom-client'))
         jvmArgs '--enable-native-access=ALL-UNNAMED',
                 '--add-exports', 'java.base/jdk.internal.misc=ALL-UNNAMED'
+        def classesDir = layout.buildDirectory.dir('classes/java/main')
+        def resourcesDir = layout.buildDirectory.dir('resources/main')
         doFirst {
             classpath = classpath.filter {
-                !it.canonicalPath.equals(file('build/classes/java/main').canonicalPath) &&
-                        !it.canonicalPath.equals(file('build/resources/main').canonicalPath) &&
+                !it.canonicalPath.equals(classesDir.get().asFile.canonicalPath) &&
+                        !it.canonicalPath.equals(resourcesDir.get().asFile.canonicalPath) &&
+                        !it.name.startsWith('common-') &&
                         !it.name.startsWith('patchy-')
             }
         }

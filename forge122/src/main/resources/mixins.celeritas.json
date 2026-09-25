@@ -3,7 +3,7 @@
   "minVersion": "0.8",
   "plugin": "org.taumc.celeritas.mixin.CeleritasVintageMixinPlugin",
   "package": "org.taumc.celeritas.mixin",
-  "compatibilityLevel": "JAVA_8",
+  "compatibilityLevel": "JAVA_25",
   "client": [
   ],
   "injectors": {
