@@ -5,6 +5,7 @@ pluginManagement {
         mavenLocal()
         mavenCentral()
         gradlePluginPortal()
+        maven("https://maven.cleanroommc.com")
         maven("https://maven.neoforged.net/releases") {
             content {
                 includeGroup("net.neoforged")
@@ -82,6 +83,7 @@ pluginManagement {
 plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version("1.0.0")
     id("dev.kikugie.stonecutter") version(extra["stonecutter_version"].toString())
+    id("com.cleanroommc.cleanroomgradle.settings") version "0.17.4"
 }
 
 rootProject.name = "celeritas"

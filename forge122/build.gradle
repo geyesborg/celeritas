@@ -1,0 +1,146 @@
+import com.cleanroommc.gradle.api.task.mc.RunMinecraft
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'com.cleanroommc.cleanroomgradle'
+}
+
+group = 'org.embeddedt'
+version = rootProject.version
+
+base {
+    archivesName = 'celeritas-forge-mc12.2'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    sourceCompatibility = targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+repositories {
+    maven { url = 'https://maven.cleanroommc.com' }
+    exclusiveContent {
+        forRepository { maven { url = 'https://cursemaven.com' } }
+        filter { includeGroup('curse.maven') }
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter { includeGroup('maven.modrinth') }
+    }
+    exclusiveContent {
+        forRepository { maven { url = 'https://nexus.gtnewhorizons.com/repository/public/' } }
+        filter {
+            includeGroupAndSubgroups('com.gtnewhorizons')
+            includeGroupAndSubgroups('com.github.GTNewHorizons')
+        }
+    }
+    mavenCentral()
+}
+
+configurations {
+    embed
+    implementation.extendsFrom(embed)
+    modCompileOnly
+    compileOnly.extendsFrom(modCompileOnly)
+    modRuntimeOnly
+    runtimeOnly.extendsFrom(modRuntimeOnly)
+}
+
+dependencies {
+    implementation cleanroom.userdev('0.6.10') {
+        accessTransformers.from(layout.projectDirectory.file('src/main/resources/META-INF/celeritas_at.cfg'))
+    }
+
+    // common stays upstream-shaped (Java 17 bytecode is fine on a Java 25 runtime);
+    // its classes are unpacked into this jar like upstream's shadowRemapJar does.
+    implementation project(':common')
+    embed(project(':common')) { transitive = false }
+
+    // joml is embedded unrelocated; upstream relocates it to impl.shadow.joml only to
+    // avoid classpath duplication, which is unnecessary here.
+    implementation 'org.joml:joml:1.10.5'
+    embed('org.joml:joml:1.10.5') { transitive = false }
+
+    compileOnly 'org.projectlombok:lombok:1.18.44'
+    annotationProcessor 'org.projectlombok:lombok:1.18.44'
+
+    // mixin API surface for compilation; Cleanroom ships mixinbooter at runtime
+    compileOnly 'zone.rong:mixinbooter:10.5'
+
+    // @Jabel annotations are referenced by source; no Jabel bytecode rewriting
+    // is needed at Java 25 (upstream uses it to emit Java 8 bytecode).
+    compileOnly 'com.github.GTNewHorizons:jabel-javac-plugin:1.0.2-GTNH'
+
+    // compileOnly: CeleritasVintageMixinPlugin probes for RFB classes at runtime.
+    compileOnly('com.gtnewhorizons.retrofuturabootstrap:RetroFuturaBootstrap:1.0.11') {
+        exclude group: 'org.apache.logging.log4j'
+    }
+
+    'modRuntimeOnly'('curse.maven:ae2-223794:2747063')
+    modCompileOnly 'maven.modrinth:fluidlogged-api:3.0.6'
+}
+
+processResources {
+    inputs.property 'version', version
+    filesMatching('mcmod.info') {
+        expand 'version': version
+    }
+    from(rootProject.file('modern/src/main/resources/icon.png'))
+}
+
+jar {
+    archiveClassifier = 'dev'
+    dependsOn ':common:jar'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(provider { configurations.embed.collect { it.isDirectory() ? it : zipTree(it) } }) {
+        exclude 'META-INF/versions/**'
+    }
+    manifest {
+        attributes(
+                'FMLAT': 'celeritas_at.cfg',
+                'FMLCorePlugin': 'org.taumc.celeritas.core.CeleritasLoadingPlugin',
+                'FMLCorePluginContainsFMLMod': 'true',
+                'ForceLoadAsMod': 'true',
+                'ModType': 'CRL',
+                'Lwjgl3-Aware': true,
+                'Lwjgl3ify-Aware': true
+        )
+    }
+    finalizedBy(tasks.named('reobfJar'))
+}
+
+tasks.named('reobfJar').configure {
+    archiveClassifier.set('')
+}
+
+tasks.register('prepareCeleritasRun', Copy) {
+    dependsOn(tasks.named('jar'))
+    from(tasks.named('jar').flatMap { it.archiveFile })
+    into(layout.projectDirectory.dir('run/cleanroom-client/mods'))
+}
+
+tasks.withType(RunMinecraft).configureEach {
+    dependsOn(tasks.named('jar'))
+    if (name == 'runClient') {
+        dependsOn(tasks.named('prepareCeleritasRun'))
+        workingDir(layout.projectDirectory.dir('run/cleanroom-client'))
+        jvmArgs '--enable-native-access=ALL-UNNAMED',
+                '--add-exports', 'java.base/jdk.internal.misc=ALL-UNNAMED'
+        doFirst {
+            classpath = classpath.filter {
+                !it.canonicalPath.equals(file('build/classes/java/main').canonicalPath) &&
+                        !it.canonicalPath.equals(file('build/resources/main').canonicalPath) &&
+                        !it.name.startsWith('patchy-')
+            }
+        }
+    }
+}
