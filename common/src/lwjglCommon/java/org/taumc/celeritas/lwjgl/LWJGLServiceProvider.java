@@ -23,8 +23,10 @@ public final class LWJGLServiceProvider {
     static LWJGLService createInstance() {
         try {
             Class.forName("org.lwjgl.opengl.GL11C");
+            System.out.println("[Celeritas] Using LWJGL3 service");
             return constructInstance("org.taumc.celeritas.lwjgl.lwjgl3.LWJGL3Service");
         } catch (ClassNotFoundException e) {
+            System.out.println("[Celeritas] Using LWJGL2 service");
             return constructInstance("org.taumc.celeritas.lwjgl.lwjgl2.LWJGL2Service");
         }
     }
