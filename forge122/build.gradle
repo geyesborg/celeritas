@@ -126,7 +126,14 @@ tasks.named('reobfJar').configure {
 tasks.register('prepareCeleritasRun', Copy) {
     dependsOn(tasks.named('jar'))
     from(tasks.named('jar').flatMap { it.archiveFile })
-    into(layout.projectDirectory.dir('run/cleanroom-client/mods'))
+    def modsDir = layout.projectDirectory.dir('run/cleanroom-client/mods').asFile
+    into(modsDir)
+    doFirst {
+        // The jar name is git-derived and changes between builds; stale copies
+        // would register as duplicate mods in FML.
+        modsDir.listFiles({ d, n -> n.startsWith('celeritas-') && n.endsWith('.jar') })
+                ?.each { it.delete() }
+    }
 }
 
 tasks.withType(RunMinecraft).configureEach {
@@ -136,9 +143,40 @@ tasks.withType(RunMinecraft).configureEach {
         workingDir(layout.projectDirectory.dir('run/cleanroom-client'))
         jvmArgs '--enable-native-access=ALL-UNNAMED',
                 '--add-exports', 'java.base/jdk.internal.misc=ALL-UNNAMED'
+        // Mirrors gl46core: -Pextra_jvm_args="-Dfoo=bar -Dbaz=quux" reaches the client JVM.
+        def extraArgs = findProperty('extra_jvm_args')
+        if (extraArgs != null && !extraArgs.toString().trim().isEmpty()) {
+            jvmArgs(*extraArgs.toString().trim().split('\\s+'))
+        }
         def classesDir = layout.buildDirectory.dir('classes/java/main')
         def resourcesDir = layout.buildDirectory.dir('resources/main')
+        // Computed at configuration time: file() inside doFirst is unsupported
+        // with the configuration cache.
+        def kirinoCfg = file('run/cleanroom-client/config/kirino_engine.cfg')
         doFirst {
+            // Kill any stale dev client still running: a live process keeps the
+            // session/lock and pollutes latest.log. Matched on command line, never
+            // window title (background/killed-window clients have no title).
+            def killCmd = "Get-CimInstance Win32_Process | Where-Object { \$_.Name -like 'java*' -and \$_.CommandLine -like '*cleanroom-client*' } | ForEach-Object { Write-Host ('[runClient] killing stale client PID ' + \$_.ProcessId); Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }"
+            try {
+                def killProc = new ProcessBuilder('powershell', '-NoProfile', '-Command', killCmd)
+                        .redirectErrorStream(true).start()
+                killProc.inputStream.eachLine { logger.lifecycle(it) }
+                killProc.waitFor()
+            } catch (Exception e) {
+                logger.warn('[runClient] stale-client kill failed: {}', e.toString())
+            }
+            // Match production: Cleanroom's Kirino engine stays OFF in dev.
+            kirinoCfg.parentFile.mkdirs()
+            if (kirinoCfg.exists()) {
+                def t = kirinoCfg.text
+                t = t.replaceAll(/B:enable=\w+/, 'B:enable=false')
+                t = t.replaceAll(/B:enableRenderDelegate=\w+/, 'B:enableRenderDelegate=false')
+                t = t.replaceAll(/B:enableHDR=\w+/, 'B:enableHDR=false')
+                kirinoCfg.text = t
+            } else {
+                kirinoCfg.text = 'B:enable=false\nB:enableRenderDelegate=false\nB:enableHDR=false\n'
+            }
             classpath = classpath.filter {
                 !it.canonicalPath.equals(classesDir.get().asFile.canonicalPath) &&
                         !it.canonicalPath.equals(resourcesDir.get().asFile.canonicalPath) &&
