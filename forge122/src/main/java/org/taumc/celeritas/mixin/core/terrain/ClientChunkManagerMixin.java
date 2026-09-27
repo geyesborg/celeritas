@@ -12,6 +12,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import org.taumc.celeritas.impl.render.entity.EntityChunkTracker;
 
 @Mixin(ChunkProviderClient.class)
 public abstract class ClientChunkManagerMixin {
@@ -22,11 +23,13 @@ public abstract class ClientChunkManagerMixin {
     @Inject(method = "loadChunk", at = @At("RETURN"))
     private void afterLoadChunkFromPacket(int x, int z, CallbackInfoReturnable<Chunk> cir) {
         ChunkTrackerHolder.get(this.world).onChunkStatusAdded(x, z, ChunkStatus.FLAG_ALL);
+        EntityChunkTracker.markChanged();
     }
 
     @Inject(method = "unloadChunk", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/chunk/Chunk;onUnload()V", shift = At.Shift.AFTER))
     private void afterUnloadChunk(int x, int z, CallbackInfo ci) {
         ChunkTrackerHolder.get(this.world).onChunkStatusRemoved(x, z, ChunkStatus.FLAG_ALL);
+        EntityChunkTracker.markChanged();
     }
 }
 

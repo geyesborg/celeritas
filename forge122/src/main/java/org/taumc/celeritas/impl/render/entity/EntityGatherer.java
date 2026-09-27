@@ -17,6 +17,23 @@ public class EntityGatherer {
     private final List<Entity>[] entityLists;
     private final Consumer<Entity> addEntity;
 
+    // Loaded chunks with entities, in loaded-chunk map order; rebuilt when the map or EntityChunkTracker changes
+    private final List<Chunk> entityChunks = new ArrayList<>();
+    private Object cachedChunkMap;
+    private int cachedGeneration;
+    // -Dceleritas.verifyEntityChunks=true: compare the cached list with a full scan every frame
+    private static final boolean VERIFY = Boolean.getBoolean("celeritas.verifyEntityChunks");
+    private int verifyFailures;
+
+    private static void collectEntityChunks(Iterable<Chunk> loadedChunks, List<Chunk> out) {
+        out.clear();
+        for (Chunk chunk : loadedChunks) {
+            if (((ChunkAccessor)chunk).celeritas$getHasEntities()) {
+                out.add(chunk);
+            }
+        }
+    }
+
     @SuppressWarnings("unchecked")
     public EntityGatherer() {
         this.entityLists = new List[NUM_PASSES];
@@ -45,7 +62,21 @@ public class EntityGatherer {
         // added to the main loadedEntityList.
         if (world.getChunkProvider() instanceof ChunkProviderClientAccessor provider) {
             var loadedChunks = provider.celeritas$getLoadedChunks();
-            for (Chunk chunk : loadedChunks.values()) {
+            // Scanning every loaded chunk each frame is costly at high render distances;
+            // the entity-bearing chunks only change with entity/chunk events.
+            if (loadedChunks != this.cachedChunkMap || EntityChunkTracker.generation() != this.cachedGeneration) {
+                this.cachedChunkMap = loadedChunks;
+                this.cachedGeneration = EntityChunkTracker.generation();
+                collectEntityChunks(loadedChunks.values(), this.entityChunks);
+            } else if (VERIFY) {
+                List<Chunk> fresh = new ArrayList<>();
+                collectEntityChunks(loadedChunks.values(), fresh);
+                if (!fresh.equals(this.entityChunks) && this.verifyFailures++ < 10) {
+                    org.taumc.celeritas.CeleritasVintage.logger().error("[EntityGatherer] cached entity chunk list is stale: {} cached, {} actual",
+                            this.entityChunks.size(), fresh.size());
+                }
+            }
+            for (Chunk chunk : this.entityChunks) {
                 if (!((ChunkAccessor)chunk).celeritas$getHasEntities()) {
                     continue;
                 }
