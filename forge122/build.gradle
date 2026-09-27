@@ -74,6 +74,9 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok:1.18.44'
     // Mixin annotation processor (CleanMix's): refmap + shadow mappings for reobfJar
     annotationProcessor 'com.cleanroommc:cleanmix:0.7.2'
+    // MixinExtras injectors (@ModifyExpressionValue, @WrapOperation, ...) need its own
+    // processor for their refmap entries; same MixinExtras version Cleanroom ships
+    annotationProcessor 'com.cleanroommc:mixinextras-common:0.5.5'
 
     // mixin API surface for compilation; Cleanroom ships mixinbooter at runtime
     compileOnly 'zone.rong:mixinbooter:10.5'
