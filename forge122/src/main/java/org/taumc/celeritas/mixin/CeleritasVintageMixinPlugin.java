@@ -34,7 +34,7 @@ public class CeleritasVintageMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public String getRefMapperConfig() {
-        return "";
+        return null; // the config's own refmap (celeritas.refmap.json, production jar)
     }
 
     @Override

@@ -72,6 +72,8 @@ dependencies {
 
     compileOnly 'org.projectlombok:lombok:1.18.44'
     annotationProcessor 'org.projectlombok:lombok:1.18.44'
+    // Mixin annotation processor (CleanMix's): refmap + shadow mappings for reobfJar
+    annotationProcessor 'com.cleanroommc:cleanmix:0.7.2'
 
     // mixin API surface for compilation; Cleanroom ships mixinbooter at runtime
     compileOnly 'zone.rong:mixinbooter:10.5'
@@ -119,8 +121,77 @@ jar {
     finalizedBy(tasks.named('reobfJar'))
 }
 
+// Mixin refmap + shadow mappings. reobfJar (Forge renamer) renames bytecode
+// references but not the member names in mixin annotations (@Inject method = "...")
+// nor mixin classes' own @Shadow members (a mixin isn't a subclass of its target),
+// so a production (SRG-named) Minecraft rejected them. Mixin's annotation processor
+// resolves both through CleanroomGradle's MCP->SRG mappings: the refmap goes into
+// the production jar only (the dev jar runs on MCP names), the shadow mappings are
+// merged into reobfJar's mappings.
+def refmapFile = layout.buildDirectory.file('mixin/celeritas.refmap.json')
+def mixinTsrg = layout.buildDirectory.file('mixin/mixin.tsrg')
+def reobfTsrg = layout.buildDirectory.file('mixin/reobf.tsrg')
+def mcp2srg = layout.buildDirectory.file('cleanroom_gradle/userdev/mcp2srg.tsrg')
+
+compileJava {
+    outputs.files(refmapFile, mixinTsrg)
+    def refmapPath = refmapFile.get().asFile.absolutePath
+    def mixinTsrgPath = mixinTsrg.get().asFile.absolutePath
+    def mappingsPath = mcp2srg.get().asFile.absolutePath
+    options.compilerArgs.addAll([
+            "-AreobfTsrgFile=${mappingsPath}",
+            "-AoutRefMapFile=${refmapPath}",
+            "-AoutTsrgFile=${mixinTsrgPath}",
+            '-AdefaultObfuscationEnv=searge',
+            '-AmappingTypes=tsrg',
+            '-Aquiet=true',
+    ])
+}
+
+def mixinReobfMappings = tasks.register('mixinReobfMappings') {
+    description = 'Vanilla MCP->SRG mappings plus the mixin classes\' shadow mappings, for reobfJar.'
+    dependsOn(tasks.named('compileJava'))
+    def base = mcp2srg.get().asFile
+    def mixin = mixinTsrg.get().asFile
+    def out = reobfTsrg.get().asFile
+    inputs.files(base, mixin)
+    outputs.file(out)
+    doLast {
+        // The processor writes flat "class member [desc] srg" lines; the vanilla
+        // file is nested TSRG ("class class" then tab-indented members): convert
+        def byClass = new LinkedHashMap<String, List<String>>()
+        if (mixin.exists()) {
+            mixin.readLines('UTF-8').findAll { !it.isBlank() }.each { line ->
+                def parts = line.trim().split(' ')
+                byClass.computeIfAbsent(parts[0]) { [] } << parts[1..-1].join(' ')
+            }
+        }
+        def sb = new StringBuilder(base.getText('UTF-8').stripTrailing()).append('\n')
+        byClass.each { cls, members ->
+            sb.append(cls).append(' ').append(cls).append('\n')
+            members.each { sb.append('\t').append(it).append('\n') }
+        }
+        out.parentFile.mkdirs()
+        out.setText(sb.toString(), 'UTF-8')
+    }
+}
+
 tasks.named('reobfJar').configure {
     archiveClassifier.set('')
+    dependsOn(mixinReobfMappings)
+    map.setFrom(reobfTsrg)
+    def refmap = refmapFile.get().asFile
+    inputs.file(refmap)
+    doLast {
+        def jarFile = outputs.files.files.find { it.name.endsWith('.jar') }
+        def fs = java.nio.file.FileSystems.newFileSystem(jarFile.toPath(), (ClassLoader) null)
+        try {
+            java.nio.file.Files.copy(refmap.toPath(), fs.getPath('celeritas.refmap.json'),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            fs.close()
+        }
+    }
 }
 
 tasks.register('prepareCeleritasRun', Copy) {
