@@ -17,7 +17,8 @@ Never push; keep `common/` diffs minimal for mergeability — changes belong in
   was replaced), local userdev `0.6.10` (`cg.repos.enableLocal=true`),
   JDK 25.0.5.7 via `gradle-dev.bat`, Java 25 source/target, no preview
 - `common` compiles at its upstream Java level and is unpacked into the
-  forge122 jar via `embed` (like upstream's shadowRemapJar, plus JOML);
+  forge122 jar via `embed` (like upstream's shadowRemapJar). JOML is not
+  embedded: Cleanroom ships org.joml:joml:1.10.9 and loads it first;
   no JVM downgrade for the 1.12.2 target
 
 ## Build

@@ -65,10 +65,9 @@ dependencies {
     implementation project(':common')
     embed(project(':common')) { transitive = false }
 
-    // joml is embedded unrelocated; upstream relocates it to impl.shadow.joml only to
-    // avoid classpath duplication, which is unnecessary here.
-    implementation 'org.joml:joml:1.10.5'
-    embed('org.joml:joml:1.10.5') { transitive = false }
+    // joml: Cleanroom ships org.joml:joml:1.10.9 as a library (loaded before mod jars),
+    // so it is not embedded; compile against the version that runs
+    implementation 'org.joml:joml:1.10.9'
 
     compileOnly 'org.projectlombok:lombok:1.18.44'
     annotationProcessor 'org.projectlombok:lombok:1.18.44'
@@ -189,6 +188,8 @@ tasks.named('reobfJar').configure {
         def jarFile = outputs.files.files.find { it.name.endsWith('.jar') }
         def fs = java.nio.file.FileSystems.newFileSystem(jarFile.toPath(), (ClassLoader) null)
         try {
+            // The renamer's decompiler hint file has no use in a mod jar
+            java.nio.file.Files.deleteIfExists(fs.getPath('fernflower_abstract_parameter_names.txt'))
             java.nio.file.Files.copy(refmap.toPath(), fs.getPath('celeritas.refmap.json'),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING)
         } finally {
