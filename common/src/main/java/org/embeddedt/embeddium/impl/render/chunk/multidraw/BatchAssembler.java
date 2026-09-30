@@ -2,6 +2,7 @@ package org.embeddedt.embeddium.impl.render.chunk.multidraw;
 
 import org.embeddedt.embeddium.impl.gl.device.CommandList;
 import org.embeddedt.embeddium.impl.gl.device.DirectMultiDrawBatch;
+import org.embeddedt.embeddium.impl.gl.device.IndirectMultiDrawBatch;
 import org.embeddedt.embeddium.impl.gl.device.MultiDrawBatch;
 import org.embeddedt.embeddium.impl.gl.tessellation.GlTessellation;
 import org.embeddedt.embeddium.impl.model.quad.properties.ModelQuadFacing;
@@ -28,8 +29,12 @@ public final class BatchAssembler {
     private BatchAssembler() {
     }
 
+    // Opt-in (needs GL 4.3 multi-draw-indirect): commands live in a GPU buffer uploaded once per cached batch,
+    // instead of arrays the driver re-reads from CPU memory on every draw
+    private static final boolean INDIRECT = Boolean.getBoolean("celeritas.indirectDraw");
+
     private static MultiDrawBatch createBatch(int capacity) {
-        return new DirectMultiDrawBatch(capacity);
+        return INDIRECT ? new IndirectMultiDrawBatch(capacity) : new DirectMultiDrawBatch(capacity);
     }
 
     /**
