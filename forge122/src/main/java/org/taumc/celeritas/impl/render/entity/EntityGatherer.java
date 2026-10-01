@@ -4,6 +4,7 @@ import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.ClassInheritanceMultiMap;
 import net.minecraft.world.chunk.Chunk;
+import org.taumc.celeritas.CeleritasVintage;
 import org.taumc.celeritas.mixin.core.terrain.ChunkAccessor;
 import org.taumc.celeritas.mixin.core.terrain.ChunkProviderClientAccessor;
 
@@ -72,7 +73,7 @@ public class EntityGatherer {
                 List<Chunk> fresh = new ArrayList<>();
                 collectEntityChunks(loadedChunks.values(), fresh);
                 if (!fresh.equals(this.entityChunks) && this.verifyFailures++ < 10) {
-                    org.taumc.celeritas.CeleritasVintage.logger().error("[EntityGatherer] cached entity chunk list is stale: {} cached, {} actual",
+                    CeleritasVintage.logger().error("[EntityGatherer] cached entity chunk list is stale: {} cached, {} actual",
                             this.entityChunks.size(), fresh.size());
                 }
             }

@@ -29,8 +29,8 @@ public final class BatchAssembler {
     private BatchAssembler() {
     }
 
-    // Opt-in (needs GL 4.3 multi-draw-indirect): commands live in a GPU buffer uploaded once per cached batch,
-    // instead of arrays the driver re-reads from CPU memory on every draw
+    // Opt-in (needs GL 4.3 multi-draw-indirect): commands live in a GPU buffer uploaded once
+    // per cached batch, instead of arrays the driver re-reads from CPU memory on every draw
     private static final boolean INDIRECT = Boolean.getBoolean("celeritas.indirectDraw");
 
     private static MultiDrawBatch createBatch(int capacity) {
