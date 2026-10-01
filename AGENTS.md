@@ -1,11 +1,15 @@
 # Agent guide: celeritas (fork)
 
 Upstream Celeritas (embeddedt/celeritas, terrain + shader-pack renderer for
-Minecraft 1.12.2) forked for Cleanroom. Remote: `upstream` only (no `origin`).
+Minecraft 1.12.2) forked for Cleanroom. Remotes: `origin` =
+github.com/geyesborg/celeritas (public, default branch `cleanroom`, full
+history incl. upstream's), `upstream` = git.taumc.org/embeddedt/celeritas
+(embeddedt's Forgejo; a GitHub fork of it isn't possible).
 Branch model: `stonecutter` tracks upstream; all local work goes on the
 `cleanroom` branch, branched from `8883da78`. Merge upstream with
 `git fetch upstream && git merge upstream/stonecutter` on `cleanroom`.
-Never push; keep `common/` diffs minimal for mergeability — changes belong in
+Push `cleanroom` to `origin` only when the user asks; never push to
+`upstream`. Keep `common/` diffs minimal for mergeability — changes belong in
 `forge122/` and minimal root plumbing.
 
 ## Stack
