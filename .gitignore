@@ -41,3 +41,5 @@ bin/
 **/run/
 
 /versions-local.json
+# local agent notes, not published
+/AGENTS.md
