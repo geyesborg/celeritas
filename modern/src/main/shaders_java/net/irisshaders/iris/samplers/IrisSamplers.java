@@ -2,8 +2,10 @@ package net.irisshaders.iris.samplers;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.mojang.blaze3d.platform.GlStateManager;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
 import net.irisshaders.iris.gl.image.GlImage;
+import net.irisshaders.iris.gl.program.ProgramSamplers;
 import net.irisshaders.iris.gl.sampler.GlSampler;
 import net.irisshaders.iris.gl.sampler.SamplerHolder;
 import net.irisshaders.iris.gl.state.StateUpdateNotifiers;
@@ -15,7 +17,10 @@ import net.irisshaders.iris.shaderpack.properties.PackShadowDirectives;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.targets.RenderTargets;
+import net.irisshaders.iris.texture.VanillaTextures;
 import net.minecraft.client.renderer.texture.AbstractTexture;
+import org.embeddedt.embeddium.impl.render.chunk.DefaultChunkRenderer;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.VertexFetchGenerator;
 
 import java.util.Set;
 import java.util.function.IntSupplier;
@@ -27,6 +32,17 @@ public class IrisSamplers {
 	public static final int LIGHTMAP_TEXTURE_UNIT = 2;
 
 	public static final ImmutableSet<Integer> WORLD_RESERVED_TEXTURE_UNITS = ImmutableSet.of(0, 1, 2);
+	// Holds the buffer of cloud faces 26.1 generates cloud vertices from, in clouds programs only.
+	public static final int CLOUD_FACES_TEXTURE_UNIT = 3;
+	public static final ImmutableSet<Integer> CLOUDS_RESERVED_TEXTURE_UNITS = ImmutableSet.of(0, 1, 2, CLOUD_FACES_TEXTURE_UNIT);
+
+	/**
+	 * Terrain programs that pull vertex data also reserve the unit Celeritas binds it to.
+	 */
+	private static final ImmutableSet<Integer> PULLED_TERRAIN_RESERVED_TEXTURE_UNITS = ImmutableSet.<Integer>builder()
+		.addAll(WORLD_RESERVED_TEXTURE_UNITS)
+		.add(DefaultChunkRenderer.VERTEX_DATA_TEXTURE_UNIT)
+		.build();
 
 	// TODO: In composite programs, there shouldn't be any reserved textures.
 	// We need a way to restore these texture bindings.
@@ -38,6 +54,23 @@ public class IrisSamplers {
 
 	private IrisSamplers() {
 		// no construction allowed
+	}
+
+	/**
+	 * Starts the samplers of a Celeritas terrain program. Units are only reserved for vertex data when the program reads
+	 * it, so that other programs keep every unit for the pack.
+	 */
+	public static ProgramSamplers.Builder terrainSamplerBuilder(int programId) {
+		boolean pulled = GlStateManager._glGetUniformLocation(programId, VertexFetchGenerator.VERTEX_DATA_SAMPLER) != -1;
+
+		if (!pulled) {
+			return ProgramSamplers.builder(programId, WORLD_RESERVED_TEXTURE_UNITS);
+		}
+
+		ProgramSamplers.Builder builder = ProgramSamplers.builder(programId, PULLED_TERRAIN_RESERVED_TEXTURE_UNITS);
+		builder.addExternalSampler(DefaultChunkRenderer.VERTEX_DATA_TEXTURE_UNIT, VertexFetchGenerator.VERTEX_DATA_SAMPLER);
+
+		return builder;
 	}
 
 	public static void initRenderer() {
@@ -183,20 +216,20 @@ public class IrisSamplers {
 			samplers.addExternalSampler(ALBEDO_TEXTURE_UNIT, "tex", "texture", "gtexture");
 		} else {
 			// TODO: Rebind unbound sampler IDs instead of hardcoding a list...
-			samplers.addDynamicSampler(whitePixel::getId, "tex", "texture", "gtexture",
+			samplers.addDynamicSampler(() -> VanillaTextures.glId(whitePixel), "tex", "texture", "gtexture",
 				"gcolor", "colortex0");
 		}
 
 		if (hasLightmap) {
 			samplers.addExternalSampler(LIGHTMAP_TEXTURE_UNIT, "lightmap");
 		} else {
-			samplers.addDynamicSampler(whitePixel::getId, "lightmap");
+			samplers.addDynamicSampler(() -> VanillaTextures.glId(whitePixel), "lightmap");
 		}
 
 		if (hasOverlay) {
 			samplers.addExternalSampler(OVERLAY_TEXTURE_UNIT, "iris_overlay");
 		} else {
-			samplers.addDynamicSampler(whitePixel::getId, "iris_overlay");
+			samplers.addDynamicSampler(() -> VanillaTextures.glId(whitePixel), "iris_overlay");
 		}
 
 		samplers.addDynamicSampler(pipeline::getCurrentNormalTexture, StateUpdateNotifiers.normalTextureChangeNotifier, "normals");

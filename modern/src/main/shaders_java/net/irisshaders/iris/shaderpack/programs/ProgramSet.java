@@ -1,9 +1,14 @@
 package net.irisshaders.iris.shaderpack.programs;
 
+//? if colorwheel {
+import net.irisshaders.iris.compat.flywheel.Colorwheel;
+import net.irisshaders.iris.compat.flywheel.shaderpack.ClrwlPackPrograms;
+//?}
 import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.blending.BlendModeOverride;
 import net.irisshaders.iris.shaderpack.ShaderPack;
 import net.irisshaders.iris.shaderpack.include.AbsolutePackPath;
+import net.irisshaders.iris.shaderpack.loading.ProgramGroup;
 import net.irisshaders.iris.shaderpack.loading.ProgramId;
 import net.irisshaders.iris.shaderpack.parsing.ComputeDirectiveParser;
 import net.irisshaders.iris.shaderpack.parsing.ConstDirectiveParser;
@@ -12,6 +17,7 @@ import net.irisshaders.iris.shaderpack.properties.PackDirectives;
 import net.irisshaders.iris.shaderpack.properties.PackRenderTargetDirectives;
 import net.irisshaders.iris.shaderpack.properties.ShaderProperties;
 import org.embeddedt.embeddium.impl.gl.shader.ShaderType;
+import org.jetbrains.annotations.Nullable;
 import org.taumc.celeritas.shaders.CeleritasShaders;
 
 import java.util.*;
@@ -21,6 +27,8 @@ public class ProgramSet implements ProgramSetInterface {
 	private final PackDirectives packDirectives;
 
 	private final ProgramSource shadow;
+	// The shadow programs for particular kinds of geometry, such as shadow_water, which fall back to shadow.
+	private final Map<ProgramId, ProgramSource> shadowVariants = new EnumMap<>(ProgramId.class);
 	private final ComputeSource[] shadowCompute;
 
 	private final ProgramSource[] shadowcomp;
@@ -66,6 +74,10 @@ public class ProgramSet implements ProgramSetInterface {
 	private final ProgramSource dhShadow;
 	private final ShaderPack pack;
 	private final ProgramSource gbuffersDamagedBlock;
+	//? if colorwheel {
+	@Nullable
+	private final ClrwlPackPrograms clrwlPrograms;
+	//?}
 
 	public ProgramSet(AbsolutePackPath directory, Function<AbsolutePackPath, String> sourceProvider,
 					  ShaderProperties shaderProperties, ShaderPack pack) {
@@ -87,6 +99,13 @@ public class ProgramSet implements ProgramSetInterface {
 		this.shadow = readProgramSource(directory, sourceProvider, "shadow", this, shaderProperties,
 			BlendModeOverride.OFF, readTesselation);
 		this.shadowCompute = readComputeArray(directory, sourceProvider, "shadow", shaderProperties);
+
+		for (ProgramId id : ProgramId.values()) {
+			if (id.getGroup() == ProgramGroup.Shadow && id != ProgramId.Shadow) {
+				shadowVariants.put(id, readProgramSource(directory, sourceProvider, id.getSourceName(), this, shaderProperties,
+					BlendModeOverride.OFF, readTesselation));
+			}
+		}
 
 		this.shadowcomp = readProgramArray(directory, sourceProvider, "shadowcomp", shaderProperties, readTesselation);
 
@@ -154,6 +173,12 @@ public class ProgramSet implements ProgramSetInterface {
 		this.finalCompute = readComputeArray(directory, sourceProvider, "final", shaderProperties);
 
 		locateDirectives();
+
+		//? if colorwheel {
+		this.clrwlPrograms = Colorwheel.isFlywheelLoaded()
+			? new ClrwlPackPrograms(directory, sourceProvider, this, shaderProperties, pack.getClrwlProperties())
+			: null;
+		//?}
 	}
 
 	@SafeVarargs
@@ -167,7 +192,7 @@ public class ProgramSet implements ProgramSetInterface {
 		return Optional.empty();
 	}
 
-	private static ProgramSource readProgramSource(AbsolutePackPath directory,
+	public static ProgramSource readProgramSource(AbsolutePackPath directory,
 												   Function<AbsolutePackPath, String> sourceProvider, String program,
 												   ProgramSet programSet, ShaderProperties properties, boolean readTesselation) {
 		return readProgramSource(directory, sourceProvider, program, programSet, properties, null, readTesselation);
@@ -217,7 +242,7 @@ public class ProgramSet implements ProgramSetInterface {
 			defaultBlendModeOverride);
 	}
 
-	private static ComputeSource readComputeSource(AbsolutePackPath directory,
+	public static ComputeSource readComputeSource(AbsolutePackPath directory,
 												   Function<AbsolutePackPath, String> sourceProvider, String program,
 												   ProgramSet programSet, ShaderProperties properties) {
 		AbsolutePackPath computePath = directory.resolve(program + ".csh");
@@ -281,6 +306,7 @@ public class ProgramSet implements ProgramSetInterface {
 		List<ComputeSource> computes = new ArrayList<>();
 
 		programs.add(shadow);
+		programs.addAll(shadowVariants.values());
 		programs.addAll(Arrays.asList(shadowcomp));
 		programs.addAll(Arrays.asList(begin));
 		programs.addAll(Arrays.asList(prepare));
@@ -484,6 +510,7 @@ public class ProgramSet implements ProgramSetInterface {
 	public Optional<ProgramSource> get(ProgramId programId) {
 		return switch (programId) {
 			case Shadow -> getShadow();
+			case ShadowSolid, ShadowCutout, ShadowWater, ShadowEntities, ShadowLightning, ShadowBlock -> shadowVariants.get(programId).requireValid();
 			case Basic -> getGbuffersBasic();
 			case Line -> gbuffersLine.requireValid();
 			case Textured -> getGbuffersTextured();
@@ -572,4 +599,14 @@ public class ProgramSet implements ProgramSetInterface {
 	public ShaderPack getPack() {
 		return pack;
 	}
+
+	//? if colorwheel {
+	/**
+	 * @return this set's Flywheel programs, or {@code null} when Flywheel is not installed
+	 */
+	@Nullable
+	public ClrwlPackPrograms getClrwlPrograms() {
+		return clrwlPrograms;
+	}
+	//?}
 }

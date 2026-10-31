@@ -25,6 +25,7 @@ import net.minecraft.world.phys.Vec3;
 import org.embeddedt.embeddium.impl.gl.device.RenderDevice;
 import org.embeddedt.embeddium.impl.render.CeleritasWorldRenderer;
 import org.embeddedt.embeddium.impl.gl.compat.FogHelper;
+import org.embeddedt.embeddium.impl.render.terrain.PostmodernRenderPassConfigurationBuilder;
 import org.embeddedt.embeddium.impl.render.terrain.SimpleWorldRenderer;
 import org.embeddedt.embeddium.impl.render.viewport.ViewportProvider;
 import org.embeddedt.embeddium.impl.world.WorldRendererExtended;
@@ -58,9 +59,6 @@ public abstract class LevelRendererMixin implements WorldRendererExtended {
     private LevelRenderState levelRenderState;
     @Unique
     private CeleritasWorldRenderer celeritas$renderer;
-
-    @Unique
-    private int frame;
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void initializeRenderer(CallbackInfo ci) {
@@ -100,6 +98,33 @@ public abstract class LevelRendererMixin implements WorldRendererExtended {
         this.celeritas$renderer.scheduleTerrainUpdate();
     }
 
+    /**
+     * @reason Redirect the check to our renderer
+     * @author JellySquid
+     */
+    @Overwrite
+    public int countRenderedSections() {
+        return this.celeritas$renderer.getVisibleChunkCount();
+    }
+
+    /**
+     * @reason Redirect the check to our renderer
+     * @author JellySquid
+     */
+    @Overwrite
+    public boolean hasRenderedAllSections() {
+        return this.celeritas$renderer.isTerrainRenderComplete();
+    }
+
+    /**
+     * @reason Redirect the check to our renderer
+     * @author JellySquid
+     */
+    @Overwrite
+    public String getSectionStatistics() {
+        return this.celeritas$renderer.getChunksDebugString();
+    }
+
     @Overwrite
     private void cullTerrain(Camera camera, Frustum frustum, boolean spectator) {
         var viewport = ((ViewportProvider) frustum).sodium$createViewport();
@@ -121,7 +146,7 @@ public abstract class LevelRendererMixin implements WorldRendererExtended {
         RenderDevice.enterManagedCode();
 
         try {
-            this.celeritas$renderer.setupTerrain(viewport, cameraState, this.frame++, spectator, false);
+            this.celeritas$renderer.setupTerrain(viewport, cameraState, this.celeritas$renderer.nextFrame(), spectator, false);
         } finally {
             RenderDevice.exitManagedCode();
         }
@@ -142,10 +167,15 @@ public abstract class LevelRendererMixin implements WorldRendererExtended {
     private void renderChunksWithCeleritas(ChunkSectionsToRender sectionsToRender, ChunkSectionLayerGroup group, GpuSampler terrainSampler) {
         RenderDevice.enterManagedCode();
         var cameraPos = this.levelRenderState.cameraRenderState.pos;
+        PostmodernRenderPassConfigurationBuilder.PostmodernPipeline.vanillaTerrainSampler = terrainSampler;
         try {
             for (ChunkSectionLayer layer : group.layers()) {
+                //? if shaders
+                net.irisshaders.iris.layer.GbufferPrograms.setPhase(net.irisshaders.iris.pipeline.WorldRenderingPhase.fromTerrainLayer(layer));
                 celeritas$renderer.drawChunkLayer(layer, cameraPos.x, cameraPos.y, cameraPos.z);
             }
+            //? if shaders
+            net.irisshaders.iris.layer.GbufferPrograms.setPhase(net.irisshaders.iris.pipeline.WorldRenderingPhase.NONE);
         } finally {
             RenderDevice.exitManagedCode();
         }

@@ -1,7 +1,9 @@
 package net.irisshaders.iris.pipeline.foss_transform;
 
 import it.unimi.dsi.fastutil.objects.Object2ObjectLinkedOpenHashMap;
+import net.irisshaders.iris.compat.sodium.impl.vertex_format.terrain_xhfp.XHFPModelVertexType;
 import net.irisshaders.iris.gl.blending.AlphaTest;
+import net.irisshaders.iris.pipeline.ShaderLoadTimings;
 import net.irisshaders.iris.pipeline.transform.Patch;
 import net.irisshaders.iris.pipeline.transform.parameter.Parameters;
 import net.irisshaders.iris.pipeline.transform.parameter.SodiumParameters;
@@ -10,17 +12,19 @@ import net.irisshaders.iris.shaderpack.preprocessor.JcppProcessor;
 import org.apache.commons.lang3.mutable.MutableObject;
 import org.embeddedt.embeddium.impl.gl.shader.ShaderConstants;
 import org.embeddedt.embeddium.impl.gl.shader.ShaderType;
+import org.embeddedt.embeddium.impl.render.chunk.compile.sorting.QuadPrimitiveType;
 import org.embeddedt.embeddium.impl.render.chunk.vertex.format.ChunkMeshFormats;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.ChunkVertexLayout;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.VertexFetchGenerator;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.VertexFetchMode;
 import org.embeddedt.embeddium.impl.render.shader.ShaderLoader;
 import org.taumc.glsl.ShaderParser;
 import org.taumc.glsl.ShaderPrinter;
-import org.taumc.glsl.StorageCollector;
 import org.taumc.glsl.Transformer;
 import org.taumc.glsl.grammar.GLSLLexer;
 import org.taumc.glsl.grammar.GLSLParser;
 import org.taumc.glsl.shadowed.org.antlr.v4.runtime.CommonToken;
 import org.taumc.glsl.shadowed.org.antlr.v4.runtime.tree.ParseTree;
-import org.taumc.glsl.shadowed.org.antlr.v4.runtime.tree.ParseTreeWalker;
 import org.taumc.glsl.shadowed.org.antlr.v4.runtime.tree.TerminalNode;
 
 import java.util.*;
@@ -50,14 +54,16 @@ public class ShaderTransformer {
             }
 
             if(result == null || !useCache) {
+                long transformStart = ShaderLoadTimings.now();
                 result = ShaderTransformationDiskCache.transformIfAbsent(key, () -> transformInternal(name, sources, patchType, parameters));
+                ShaderLoadTimings.record(ShaderLoadTimings.Stage.TRANSFORM, transformStart);
                 // Clear this, we don't want whatever random type was last transformed being considered for the key
                 parameters.type = null;
                 synchronized (shaderTransformationCache) {
                     if(shaderTransformationCache.size() >= CACHE_SIZE) {
                         shaderTransformationCache.removeLast();
                     }
-                    shaderTransformationCache.putAndMoveToLast(key, result);
+                    shaderTransformationCache.putAndMoveToFirst(key, result);
                 }
             }
 
@@ -82,14 +88,16 @@ public class ShaderTransformer {
                 result = shaderTransformationCache.getAndMoveToFirst(key);
             }
             if(result == null || !useCache) {
+                long transformStart = ShaderLoadTimings.now();
                 result = transformInternal(name, inputs, patchType, parameters);
+                ShaderLoadTimings.record(ShaderLoadTimings.Stage.TRANSFORM, transformStart);
                 // Clear this, we don't want whatever random type was last transformed being considered for the key
                 parameters.type = null;
                 synchronized (shaderTransformationCache) {
                     if(shaderTransformationCache.size() >= CACHE_SIZE) {
                         shaderTransformationCache.removeLast();
                     }
-                    shaderTransformationCache.putAndMoveToLast(key, result);
+                    shaderTransformationCache.putAndMoveToFirst(key, result);
                 }
             }
 
@@ -105,25 +113,90 @@ public class ShaderTransformer {
         versionedReservedWords.put(400, List.of("sample"));
     }
 
-    private static final Pattern texturePattern = Pattern.compile("\\btexture\\s*\\(|(\\btexture\\b)");
+    /**
+     * Renames identifiers that are keywords to the AST parser but valid in the given GLSL version, prefixing them
+     * with {@code iris_renamed_}.
+     */
+    public static String renameReservedWords(String input, int version) {
+        // texture() calls keep their name, only variables called texture are renamed.
+        input = renameWord(input, "texture", true);
 
-    private static String replaceTexture(String input) {
-        var matcher = texturePattern.matcher(input);
-
-        StringBuilder builder = new StringBuilder();
-        while (matcher.find()) {
-            String texMatch = matcher.group(1);
-            matcher.appendReplacement(builder, texMatch != null ? matcher.group(0).replaceFirst(Pattern.quote(texMatch), "iris_renamed_texture") : matcher.group(0));
+        for (int reservedVersion : versionedReservedWords.keySet()) {
+            if (version < reservedVersion) {
+                for (String reservedWord : versionedReservedWords.get(reservedVersion)) {
+                    input = renameWord(input, reservedWord, false);
+                }
+            }
         }
-        matcher.appendTail(builder);
 
-        return builder.toString();
+        return input;
+    }
+
+    /**
+     * Prefixes every whole-word occurrence of {@code word} with {@code iris_renamed_}, matching what the regex
+     * {@code \bword\b} finds. A regex starting with {@code \b} can't use Java's fast literal search and tries a match
+     * at every position of these large sources, so this searches for the word directly.
+     */
+    private static String renameWord(String input, String word, boolean skipCalls) {
+        int index = input.indexOf(word);
+
+        if (index < 0) {
+            return input;
+        }
+
+        StringBuilder builder = null;
+        int copiedUpTo = 0;
+
+        while (index >= 0) {
+            int end = index + word.length();
+
+            if ((index == 0 || !isWordChar(input.charAt(index - 1))) && (end == input.length() || !isWordChar(input.charAt(end)))
+                    && !(skipCalls && isFollowedByParenthesis(input, end))) {
+                if (builder == null) {
+                    builder = new StringBuilder(input.length() + 64);
+                }
+
+                builder.append(input, copiedUpTo, index).append("iris_renamed_").append(word);
+                copiedUpTo = end;
+            }
+
+            index = input.indexOf(word, end);
+        }
+
+        if (builder == null) {
+            return input;
+        }
+
+        return builder.append(input, copiedUpTo, input.length()).toString();
+    }
+
+    // The characters Java 17's regex \b treats as part of a word.
+    private static boolean isWordChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_';
+    }
+
+    // Matches the regex \s*\(
+    private static boolean isFollowedByParenthesis(String input, int index) {
+        while (index < input.length()) {
+            char c = input.charAt(index);
+
+            if (c == '(') {
+                return true;
+            } else if (c != ' ' && c != '\t' && c != '\n' && c != '\u000B' && c != '\f' && c != '\r') {
+                return false;
+            }
+
+            index++;
+        }
+
+        return false;
     }
 
     private static <P extends Parameters> Map<ShaderType, String> transformInternal(String name, Map<ShaderType, String> inputs, Patch patchType, P parameters) {
         EnumMap<ShaderType, String> result = new EnumMap<>(ShaderType.class);
         EnumMap<ShaderType, Transformer> types = new EnumMap<>(ShaderType.class);
         EnumMap<ShaderType, String> prepatched = new EnumMap<>(ShaderType.class);
+        Map<String, VertexFetchGenerator.GlslType> vertexInputTypes = new HashMap<>();
 
         for (ShaderType type : ShaderType.values()) {
             parameters.type = type;
@@ -154,20 +227,7 @@ public class ShaderTransformer {
 
             String profileString = "#version " + versionString + " " + profile + "\n";
 
-            // This handles some reserved keywords which cause the AST parser to fail
-            // but aren't necessarily invalid for GLSL versions prior to 400. This simple
-            // renames the matching strings and prefixes them with iris_renamed_
-
-            input = replaceTexture(input);
-
-            for (int version : versionedReservedWords.keySet()) {
-                if (versionInt < version) {
-                    for (String reservedWord : versionedReservedWords.get(version)) {
-                        String newName = "iris_renamed_" + reservedWord;
-                        input = input.replaceAll("\\b" + reservedWord + "\\b", newName);
-                    }
-                }
-            }
+            input = renameReservedWords(input, versionInt);
 
             var parsedShader = ShaderParser.parseShader(input);
             var translationUnit = parsedShader.full();
@@ -223,6 +283,11 @@ public class ShaderTransformer {
                 }
             }
             CompTransformer.transformEach(transformer, parameters);
+
+            if (patchType == Patch.SODIUM && type == ShaderType.VERTEX) {
+                vertexInputTypes.putAll(takeLayoutInputs(transformer, ((SodiumParameters) parameters).vertexType.getLayout()));
+            }
+
             types.put(type, transformer);
 
             var extensions = versionPattern.matcher(getFormattedShader(parsedShader.pre(), "")).replaceFirst("").trim();
@@ -235,7 +300,7 @@ public class ShaderTransformer {
                 String header = prepatched.get(entry.getKey());
                 if (entry.getKey() == ShaderType.VERTEX && patchType == Patch.SODIUM) {
                     // Inject _vert_init contents
-                    header += computeCeleritasHeader((SodiumParameters)parameters);
+                    header += computeCeleritasHeader((SodiumParameters)parameters, vertexInputTypes);
                 }
                 String formattedShader = getFormattedShader(tree, header);
                 result.put(entry.getKey(), formattedShader);
@@ -244,11 +309,51 @@ public class ShaderTransformer {
         return result;
     }
 
-    private static String computeCeleritasHeader(SodiumParameters parameters) {
+    /**
+     * Removes the vertex stage's declarations of inputs that the layout provides, and returns the types they were declared
+     * with. The generated header then declares those inputs with the same types.
+     */
+    private static Map<String, VertexFetchGenerator.GlslType> takeLayoutInputs(Transformer translationUnit, ChunkVertexLayout layout) {
+        Set<String> layoutNames = new HashSet<>();
+        layout.vertex().getAttributes().forEach(attribute -> layoutNames.add(attribute.getName()));
+
+        if (layout.header() != null) {
+            layout.header().format().getAttributes().forEach(attribute -> layoutNames.add(attribute.getName()));
+        }
+
+        Map<String, VertexFetchGenerator.GlslType> declaredTypes = new HashMap<>();
+
+        for (int qualifier : new int[] { GLSLLexer.IN, GLSLLexer.ATTRIBUTE }) {
+            translationUnit.findQualifiers(qualifier).forEach((name, declaration) -> {
+                if (!layoutNames.contains(name)) {
+                    return;
+                }
+
+                var specifier = declaration.fully_specified_type().type_specifier();
+
+                if (specifier.array_specifier() != null) {
+                    throw new IllegalStateException("Vertex input " + name + " cannot be declared as an array");
+                }
+
+                declaredTypes.put(name, VertexFetchGenerator.GlslType.parse(specifier.type_specifier_nonarray().getText()));
+            });
+        }
+
+        declaredTypes.keySet().forEach(translationUnit::removeVariable);
+
+        return declaredTypes;
+    }
+
+    private static String computeCeleritasHeader(SodiumParameters parameters, Map<String, VertexFetchGenerator.GlslType> vertexInputTypes) {
         var defines = parameters.vertexType.getDefines();
-        String chunkVertexHeader = org.embeddedt.embeddium.impl.gl.shader.ShaderParser.parseShader(ShaderLoader.getShaderSource("sodium:include/chunk_vertex.glsl"), ShaderLoader::getShaderSource,
+        var generatedSources = VertexFetchGenerator.sources(parameters.vertexType.getLayout(),
+                QuadPrimitiveType.TRIANGULATED.getVerticesPerPrimitive(), parameters.vertexFetchMode, false, vertexInputTypes);
+        String chunkVertexHeader = org.embeddedt.embeddium.impl.gl.shader.ShaderParser.parseShader(ShaderLoader.getShaderSource("sodium:include/chunk_vertex.glsl"), ShaderLoader.sourceProvider(generatedSources),
                 ShaderConstants.builder().addAll(defines).build());
-        return "\n\n" + chunkVertexHeader + "\n\n";
+        String quadInputFunctions = parameters.vertexFetchMode == VertexFetchMode.PULLED
+                ? String.join("\n\n", QUAD_INPUT_FUNCTIONS) + "\n\n"
+                : "";
+        return "\n\n" + chunkVertexHeader + "\n\n" + quadInputFunctions;
     }
 
     private static void patchVanillaCore(Transformer translationUnit, VanillaParameters parameters) {
@@ -274,35 +379,177 @@ public class ShaderTransformer {
         }
     }
 
-    public static void replaceMidTexCoord(Transformer translationUnit, float textureScale) {
-        int type = translationUnit.findType("mc_midTexCoord");
-        if (type != 0) {
-            translationUnit.removeVariable("mc_midTexCoord");
-        }
-        translationUnit.replaceExpression("mc_midTexCoord", "iris_MidTex");
-        switch (type) {
-            case 0:
-                return;
-            case GLSLLexer.BOOL:
-                return;
-            case GLSLLexer.FLOAT:
-                translationUnit.injectFunction("float iris_MidTex = (mc_midTexCoord.x * " + textureScale + ").x;"); //TODO go back to variable if order is fixed
-                break;
-            case GLSLLexer.VEC2:
-                translationUnit.injectFunction("vec2 iris_MidTex = (mc_midTexCoord.xy * " + textureScale + ").xy;");
-                break;
-            case GLSLLexer.VEC3:
-                translationUnit.injectFunction("vec3 iris_MidTex = vec3(mc_midTexCoord.xy * " + textureScale + ", 0.0);");
-                break;
-            case GLSLLexer.VEC4:
-                translationUnit.injectFunction("vec4 iris_MidTex = vec4(mc_midTexCoord.xy * " + textureScale + ", 0.0, 1.0);");
-                break;
-            default:
+    /**
+     * Declares an attribute the vertex format provides as integers with its integer type, and converts each use of it
+     * to the type the shader declared it with. Integer attributes are read through {@code iris_<name>}.
+     */
+    public static void patchIntegerAttribute(Transformer translationUnit, String name, int components) {
+        int type = translationUnit.findType(name);
+        String attribute = "iris_" + name;
+        String conversion = switch (type) {
+            case GLSLLexer.FLOAT -> "float(" + attribute + ".x)";
+            case GLSLLexer.INT -> attribute + ".x";
+            case GLSLLexer.VEC2 -> "vec2(" + padComponents(attribute, components, 2, "0.0", "1.0") + ")";
+            case GLSLLexer.VEC3 -> "vec3(" + padComponents(attribute, components, 3, "0.0", "1.0") + ")";
+            case GLSLLexer.VEC4 -> "vec4(" + padComponents(attribute, components, 4, "0.0", "1.0") + ")";
+            case GLSLLexer.IVEC2 -> "ivec2(" + padComponents(attribute, components, 2, "0", "1") + ")";
+            case GLSLLexer.IVEC3 -> "ivec3(" + padComponents(attribute, components, 3, "0", "1") + ")";
+            case GLSLLexer.IVEC4 -> "ivec4(" + padComponents(attribute, components, 4, "0", "1") + ")";
+            default -> null;
+        };
 
+        if (conversion == null) {
+            return;
         }
 
-        translationUnit.injectVariable("in vec2 mc_midTexCoord;"); //TODO why is this inserted oddly?
+        translationUnit.removeVariable(name);
+        translationUnit.replaceExpression(name, conversion);
+        translationUnit.injectVariable("in ivec" + components + " " + attribute + ";");
+    }
 
+    // Missing components read as they would from a float attribute: zero, and one in the fourth.
+    private static String padComponents(String attribute, int available, int declared, String zero, String one) {
+        StringBuilder builder = new StringBuilder();
+
+        for (int i = 0; i < declared; i++) {
+            if (i > 0) {
+                builder.append(", ");
+            }
+
+            if (i < available) {
+                builder.append(attribute).append('.').append("xyzw".charAt(i));
+            } else {
+                builder.append(i == 3 ? one : zero);
+            }
+        }
+
+        return builder.toString();
+    }
+
+    /**
+     * XHFP doesn't store {@code at_midBlock}: it is derived from the block's position within its section, which the vertex
+     * position is relative to, and stored in 1/64ths of a block with the block's light emission in {@code w}.
+     */
+    public static void replaceMidBlock(Transformer translationUnit, SodiumParameters parameters) {
+        if (!(parameters.vertexType instanceof XHFPModelVertexType)) {
+            return;
+        }
+
+        var declaredType = findInputType(translationUnit, "at_midBlock");
+
+        if (declaredType == null) {
+            return;
+        }
+
+        translationUnit.removeVariable("at_midBlock");
+        translationUnit.injectVariable(declaredType + " at_midBlock;");
+        translationUnit.injectFunction(String.join("\n",
+                "vec4 iris_ComputeMidBlock() {",
+                "    uint info = " + XHFPModelVertexType.BLOCK_INFO + ";",
+                "    vec3 block = vec3(uvec3(info, info >> 4u, info >> 8u) & uvec3(15u));",
+                "    vec3 offset = (info & 0x1000u) != 0u ? (block + 0.5 - _vert_position) * 64.0 : vec3(0.0);",
+                "    return vec4(offset, float((info >> 16u) & 0xFFu));",
+                "}"));
+        // Assigned in main, after _vert_init has provided _vert_position
+        translationUnit.prependMain("at_midBlock = " + declaredType.adapt("iris_ComputeMidBlock()", VertexFetchGenerator.GlslType.parse("vec4")) + ";");
+    }
+
+    /**
+     * Inputs that are constant across a quad and that pulled formats can compute from its corners, with the GLSL
+     * computing each.
+     */
+    private static final Map<String, Map.Entry<VertexFetchGenerator.GlslType, String>> QUAD_INPUTS = Map.of(
+            "iris_Normal", Map.entry(VertexFetchGenerator.GlslType.parse("vec3"), "iris_ComputeFaceNormal()"),
+            "at_tangent", Map.entry(VertexFetchGenerator.GlslType.parse("vec4"), "iris_ComputeTangent()"),
+            "mc_midTexCoord", Map.entry(VertexFetchGenerator.GlslType.parse("vec2"), "iris_ComputeMidTexCoord()"));
+
+    /**
+     * Mirror NormalHelper#computeFaceNormal and NormalHelper#computeTangent, including leaving zero-length vectors as they
+     * are. Ordered so each function follows the ones it calls, which is why they go in the header rather than being
+     * injected: the transformer doesn't keep injected functions in order.
+     */
+    private static final List<String> QUAD_INPUT_FUNCTIONS = List.of(
+            String.join("\n",
+                    "vec3 iris_NormalizeOrZero(vec3 v) {",
+                    "    float lengthSquared = dot(v, v);",
+                    "    return lengthSquared == 0.0 ? v : v * inversesqrt(lengthSquared);",
+                    "}"),
+            String.join("\n",
+                    "vec3 iris_ComputeFaceNormal() {",
+                    "    vec3 p0 = _vert_corner_position(0);",
+                    "    vec3 p1 = _vert_corner_position(1);",
+                    "    vec3 p2 = _vert_corner_position(2);",
+                    "    vec3 p3 = _vert_corner_position(3);",
+                    "    return iris_NormalizeOrZero(cross(p2 - p0, p3 - p1));",
+                    "}"),
+            String.join("\n",
+                    "vec4 iris_ComputeTangent() {",
+                    "    vec3 normal = iris_ComputeFaceNormal();",
+                    "    vec3 p0 = _vert_corner_position(0);",
+                    "    vec2 t0 = _vert_corner_tex_coord(0);",
+                    "    vec3 edge1 = _vert_corner_position(1) - p0;",
+                    "    vec3 edge2 = _vert_corner_position(2) - p0;",
+                    "    vec2 delta1 = _vert_corner_tex_coord(1) - t0;",
+                    "    vec2 delta2 = _vert_corner_tex_coord(2) - t0;",
+                    "    float denom = delta1.x * delta2.y - delta2.x * delta1.y;",
+                    "    float f = denom == 0.0 ? 1.0 : 1.0 / denom;",
+                    "    vec3 tangent = iris_NormalizeOrZero(f * (delta2.y * edge1 - delta1.y * edge2));",
+                    "    vec3 bitangent = iris_NormalizeOrZero(f * (-delta2.x * edge1 + delta1.x * edge2));",
+                    "    return vec4(tangent, dot(bitangent, cross(tangent, normal)) < 0.0 ? -1.0 : 1.0);",
+                    "}"),
+            String.join("\n",
+                    "vec2 iris_ComputeMidTexCoord() {",
+                    "    vec2 sum = _vert_corner_tex_coord(0) + _vert_corner_tex_coord(1) + _vert_corner_tex_coord(2) + _vert_corner_tex_coord(3);",
+                    "    return sum * 0.25;",
+                    "}"));
+
+    /**
+     * Pulled formats can read every corner of a quad, so inputs that are constant across it are computed rather than
+     * stored when the layout lacks them. Must run after {@link #patchMultiTexCoord3}, which can declare
+     * {@code mc_midTexCoord}, and before {@code _vert_init()} is prepended to main.
+     */
+    public static void replaceQuadInputs(Transformer translationUnit, SodiumParameters parameters) {
+        if (parameters.vertexFetchMode != VertexFetchMode.PULLED) {
+            return;
+        }
+
+        var layout = parameters.vertexType.getLayout();
+        Set<String> storedNames = new HashSet<>();
+        layout.vertex().getAttributes().forEach(attribute -> storedNames.add(attribute.getName()));
+
+        if (layout.header() != null) {
+            layout.header().format().getAttributes().forEach(attribute -> storedNames.add(attribute.getName()));
+        }
+
+        for (var entry : QUAD_INPUTS.entrySet()) {
+            String name = entry.getKey();
+
+            if (storedNames.contains(name)) {
+                continue;
+            }
+
+            var declaredType = findInputType(translationUnit, name);
+
+            if (declaredType == null) {
+                continue;
+            }
+
+            translationUnit.removeVariable(name);
+            translationUnit.injectVariable(declaredType + " " + name + ";");
+            translationUnit.prependMain(name + " = " + declaredType.adapt(entry.getValue().getValue(), entry.getValue().getKey()) + ";");
+        }
+    }
+
+    private static VertexFetchGenerator.GlslType findInputType(Transformer translationUnit, String name) {
+        for (int qualifier : new int[] { GLSLLexer.IN, GLSLLexer.ATTRIBUTE }) {
+            var declaration = translationUnit.findQualifiers(qualifier).get(name);
+
+            if (declaration != null) {
+                return VertexFetchGenerator.GlslType.parse(declaration.fully_specified_type().type_specifier().getText());
+            }
+        }
+
+        return null;
     }
 
     public static void addIfNotExists(Transformer translationUnit, String name, String code) {
@@ -402,12 +649,7 @@ public class ShaderTransformer {
 
 
     public static void upgradeStorageQualifiers(Transformer root, Parameters parameters) {
-        List<TerminalNode> tokens = new ArrayList<>();
-        root.mutateTree(tree -> {
-            ParseTreeWalker.DEFAULT.walk(new StorageCollector(tokens), tree);
-        });
-
-        for (TerminalNode node : tokens) {
+        for (TerminalNode node : root.collectStorage()) {
             if (!(node.getSymbol() instanceof CommonToken token)) {
                 return;
             }

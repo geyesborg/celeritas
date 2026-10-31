@@ -1,7 +1,6 @@
 package net.irisshaders.iris.gl.program;
 
 import com.mojang.blaze3d.platform.GlStateManager;
-import com.mojang.blaze3d.shaders.ProgramManager;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import org.embeddedt.embeddium.impl.gl.GlObject;
 import org.lwjgl.opengl.GL43C;
@@ -22,12 +21,19 @@ public final class Program extends GlObject {
 	public static void unbind() {
 		ProgramUniforms.clearActiveUniforms();
 		ProgramSamplers.clearActiveSamplers();
-		ProgramManager.glUseProgram(0);
+		GlStateManager._glUseProgram(0);
 	}
 
 	public void use() {
 		IrisRenderSystem.memoryBarrier(GL43C.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL43C.GL_TEXTURE_FETCH_BARRIER_BIT | GL43C.GL_SHADER_STORAGE_BARRIER_BIT);
-		ProgramManager.glUseProgram(handle());
+		bind();
+	}
+
+	/**
+	 * Like {@link #use()}, but without waiting for image and storage buffer writes by earlier draws to be visible.
+	 */
+	public void bind() {
+		GlStateManager._glUseProgram(handle());
 
 		uniforms.update();
 		samplers.update();

@@ -7,7 +7,6 @@ import net.irisshaders.iris.gl.image.ImageHolder;
 import net.irisshaders.iris.gl.sampler.GlSampler;
 import net.irisshaders.iris.gl.sampler.SamplerHolder;
 import net.irisshaders.iris.gl.shader.ProgramCreator;
-import net.irisshaders.iris.gl.shader.ShaderCompileException;
 import net.irisshaders.iris.gl.state.ValueUpdateNotifier;
 import net.irisshaders.iris.gl.texture.InternalTextureFormat;
 import net.irisshaders.iris.gl.texture.TextureType;
@@ -15,9 +14,17 @@ import org.embeddedt.embeddium.impl.gl.shader.GlShader;
 import org.embeddedt.embeddium.impl.gl.shader.ShaderType;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
 import java.util.function.IntSupplier;
 
 public class ProgramBuilder extends ProgramUniforms.Builder implements SamplerHolder, ImageHolder {
+	private static final ShaderType[] GRAPHICS_STAGES = {
+		ShaderType.VERTEX, ShaderType.TESS_CTRL, ShaderType.TESS_EVALUATE, ShaderType.GEOM, ShaderType.FRAGMENT
+	};
+
 	private final int program;
 	private final ProgramSamplers.Builder samplers;
 	private final ProgramImages.Builder images;
@@ -32,62 +39,63 @@ public class ProgramBuilder extends ProgramUniforms.Builder implements SamplerHo
 
 	public static ProgramBuilder begin(String name, @Nullable String vertexSource, @Nullable String geometrySource,
 									   @Nullable String fragmentSource, ImmutableSet<Integer> reservedTextureUnits) {
-		RenderSystem.assertOnRenderThread();
-
-		GlShader vertex;
-		GlShader geometry;
-		GlShader fragment;
-
-		vertex = buildShader(ShaderType.VERTEX, name + ".vsh", vertexSource);
-
-		if (geometrySource != null) {
-			geometry = buildShader(ShaderType.GEOMETRY, name + ".gsh", geometrySource);
-		} else {
-			geometry = null;
-		}
-
-		fragment = buildShader(ShaderType.FRAGMENT, name + ".fsh", fragmentSource);
-
-		int programId;
-
-		if (geometry != null) {
-			programId = ProgramCreator.create(name, vertex, geometry, fragment);
-		} else {
-			programId = ProgramCreator.create(name, vertex, fragment);
-		}
-
-		vertex.destroy();
-
-		if (geometry != null) {
-			geometry.destroy();
-		}
-
-		fragment.destroy();
-
-		return new ProgramBuilder(name, programId, reservedTextureUnits);
+		return finish(submit(name, vertexSource, geometrySource, fragmentSource), reservedTextureUnits);
 	}
 
 	public static ProgramBuilder beginCompute(String name, @Nullable String source, ImmutableSet<Integer> reservedTextureUnits) {
+		return finish(submitCompute(name, source), reservedTextureUnits);
+	}
+
+	/**
+	 * Starts compiling and linking a program without waiting for the result. See {@link ProgramCreator#submit}.
+	 */
+	public static ProgramCreator.Submitted submit(String name, @Nullable String vertexSource, @Nullable String geometrySource,
+												  @Nullable String fragmentSource) {
+		Map<ShaderType, String> sources = new EnumMap<>(ShaderType.class);
+		sources.put(ShaderType.VERTEX, vertexSource);
+		sources.put(ShaderType.GEOM, geometrySource);
+		sources.put(ShaderType.FRAGMENT, fragmentSource);
+
+		return submit(name, sources, ProgramCreator.DEFAULT_ATTRIBUTE_LOCATIONS);
+	}
+
+	/**
+	 * Starts compiling and linking a program from its vertex and fragment shaders, plus any tessellation or geometry
+	 * shaders present in {@code sources}.
+	 */
+	public static ProgramCreator.Submitted submit(String name, Map<ShaderType, String> sources, Map<String, Integer> attributeLocations) {
+		RenderSystem.assertOnRenderThread();
+
+		List<GlShader.Deferred> shaders = new ArrayList<>(GRAPHICS_STAGES.length);
+
+		for (ShaderType type : GRAPHICS_STAGES) {
+			String source = sources.get(type);
+
+			if (source != null || type == ShaderType.VERTEX || type == ShaderType.FRAGMENT) {
+				shaders.add(buildShader(type, name + "." + type.fileExtension, source));
+			}
+		}
+
+		return ProgramCreator.submit(name, shaders, attributeLocations);
+	}
+
+	public static ProgramCreator.Submitted submitCompute(String name, @Nullable String source) {
 		RenderSystem.assertOnRenderThread();
 
 		if (!IrisRenderSystem.supportsCompute()) {
 			throw new IllegalStateException("This PC does not support compute shaders, but it's attempting to be used???");
 		}
 
-		GlShader compute = buildShader(ShaderType.COMPUTE, name + ".csh", source);
-
-		int programId = ProgramCreator.create(name, compute);
-
-		compute.destroy();
-
-		return new ProgramBuilder(name, programId, reservedTextureUnits);
+		return ProgramCreator.submit(name, List.of(buildShader(ShaderType.COMPUTE, name + ".csh", source)), ProgramCreator.DEFAULT_ATTRIBUTE_LOCATIONS);
 	}
 
-	private static GlShader buildShader(ShaderType shaderType, String name, @Nullable String source) {
+	public static ProgramBuilder finish(ProgramCreator.Submitted program, ImmutableSet<Integer> reservedTextureUnits) {
+		return new ProgramBuilder(program.getName(), program.finish(), reservedTextureUnits);
+	}
+
+	private static GlShader.Deferred buildShader(ShaderType shaderType, String name, @Nullable String source) {
 		try {
-			return new GlShader(shaderType, name, source);
-		} catch (ShaderCompileException e) {
-			throw e;
+			return GlShader.compileDeferred(shaderType, name, source);
 		} catch (RuntimeException e) {
 			throw new RuntimeException("Failed to compile " + shaderType + " shader for program " + name, e);
 		}

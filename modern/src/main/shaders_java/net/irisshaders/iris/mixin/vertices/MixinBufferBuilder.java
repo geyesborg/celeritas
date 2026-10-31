@@ -60,6 +60,8 @@ public abstract class MixinBufferBuilder implements BlockSensitiveBufferBuilder,
 	@Unique
 	private short currentRenderType = -1;
 	@Unique
+	private byte currentLightEmission;
+	@Unique
 	private int currentLocalPosX;
 	@Unique
 	private int currentLocalPosY;
@@ -218,7 +220,7 @@ public abstract class MixinBufferBuilder implements BlockSensitiveBufferBuilder,
 			float x = buffer.getFloat(posIndex);
 			float y = buffer.getFloat(posIndex + 4);
 			float z = buffer.getFloat(posIndex + 8);
-			this.putInt(0, ExtendedDataHelper.computeMidBlock(x, y, z, currentLocalPosX, currentLocalPosY, currentLocalPosZ));
+			this.putInt(0, ExtendedDataHelper.computeMidBlock(x, y, z, currentLocalPosX, currentLocalPosY, currentLocalPosZ) | ((currentLightEmission & 0xFF) << 24));
 			this.nextElement();
 		}
 
@@ -259,9 +261,10 @@ public abstract class MixinBufferBuilder implements BlockSensitiveBufferBuilder,
 	}
 
 	@Override
-	public void beginBlock(short block, short renderType, int localPosX, int localPosY, int localPosZ) {
+	public void beginBlock(short block, short renderType, byte lightEmission, int localPosX, int localPosY, int localPosZ) {
 		this.currentBlock = block;
 		this.currentRenderType = renderType;
+		this.currentLightEmission = lightEmission;
 		this.currentLocalPosX = localPosX;
 		this.currentLocalPosY = localPosY;
 		this.currentLocalPosZ = localPosZ;
@@ -271,6 +274,7 @@ public abstract class MixinBufferBuilder implements BlockSensitiveBufferBuilder,
 	public void endBlock() {
 		this.currentBlock = -1;
 		this.currentRenderType = -1;
+		this.currentLightEmission = 0;
 		this.currentLocalPosX = 0;
 		this.currentLocalPosY = 0;
 		this.currentLocalPosZ = 0;
@@ -300,7 +304,7 @@ public abstract class MixinBufferBuilder implements BlockSensitiveBufferBuilder,
 			long position = pointer + iris$offsetPosition;
 			int midBlock = ExtendedDataHelper.computeMidBlock(
 					MemoryUtil.memGetFloat(position), MemoryUtil.memGetFloat(position + 4), MemoryUtil.memGetFloat(position + 8),
-					currentLocalPosX, currentLocalPosY, currentLocalPosZ);
+					currentLocalPosX, currentLocalPosY, currentLocalPosZ) | ((currentLightEmission & 0xFF) << 24);
 			MemoryUtil.memPutInt(pointer + iris$offsetMidBlock, midBlock);
 		} else {
 			long entity = pointer + iris$offsetEntity;
@@ -356,7 +360,6 @@ public abstract class MixinBufferBuilder implements BlockSensitiveBufferBuilder,
 
 //?} else {
 /*import com.mojang.blaze3d.vertex.*;
-import net.irisshaders.iris.shaderpack.materialmap.WorldRenderingSettings;
 import net.irisshaders.iris.uniforms.CapturedRenderingState;
 import net.irisshaders.iris.vertices.BlockSensitiveBufferBuilder;
 import net.irisshaders.iris.vertices.BufferBuilderPolygonView;
@@ -365,8 +368,6 @@ import net.irisshaders.iris.vertices.ImmediateState;
 import net.irisshaders.iris.vertices.IrisVertexFormats;
 import net.irisshaders.iris.vertices.NormI8;
 import net.irisshaders.iris.vertices.NormalHelper;
-import org.embeddedt.embeddium.api.vertex.format.VertexFormatDescription;
-import org.embeddedt.embeddium.api.vertex.format.VertexFormatRegistry;
 import org.joml.Vector3f;
 import org.lwjgl.system.MemoryUtil;
 import org.spongepowered.asm.mixin.Final;
@@ -439,6 +440,8 @@ public abstract class MixinBufferBuilder implements VertexConsumer, BlockSensiti
     @Unique
     private short currentRenderType = -1;
     @Unique
+    private byte currentLightEmission;
+    @Unique
     private int currentLocalPosX;
     @Unique
     private int currentLocalPosY;
@@ -451,15 +454,17 @@ public abstract class MixinBufferBuilder implements VertexConsumer, BlockSensiti
         iris$isTerrain = false;
         injectNormalAndUV1 = false;
 
-        if (ImmediateState.skipExtension.get() || !WorldRenderingSettings.INSTANCE.shouldUseExtendedVertexFormat()) {
+        if (!ImmediateState.shouldExtendNewBuffers()) {
             return format;
         }
 
         if (format == DefaultVertexFormat.BLOCK || format == IrisVertexFormats.TERRAIN) {
             extending = true;
             iris$isTerrain = true;
+            // 26.1's block format has no normal.
+            injectNormalAndUV1 = true;
             return IrisVertexFormats.TERRAIN;
-        } else if (format == DefaultVertexFormat.NEW_ENTITY || format == IrisVertexFormats.ENTITY) {
+        } else if (format == IrisVertexFormats.VANILLA_ENTITY || format == IrisVertexFormats.ENTITY) {
             extending = true;
             return IrisVertexFormats.ENTITY;
         } else if (format == DefaultVertexFormat.POSITION_COLOR_TEX_LIGHTMAP || format == IrisVertexFormats.GLYPH) {
@@ -489,7 +494,7 @@ public abstract class MixinBufferBuilder implements VertexConsumer, BlockSensiti
             if (midBlock != -1L) {
                 MemoryUtil.memPutInt(midBlock, ExtendedDataHelper.computeMidBlock(
                         MemoryUtil.memGetFloat(position), MemoryUtil.memGetFloat(position + 4L), MemoryUtil.memGetFloat(position + 8L),
-                        currentLocalPosX, currentLocalPosY, currentLocalPosZ));
+                        currentLocalPosX, currentLocalPosY, currentLocalPosZ) | ((currentLightEmission & 0xFF) << 24));
             }
         } else {
             long entity = beginElement(IrisVertexFormats.ENTITY_ID_ELEMENT);
@@ -537,10 +542,9 @@ public abstract class MixinBufferBuilder implements VertexConsumer, BlockSensiti
     private void fillExtendedData(int vertexAmount) {
         // The format is final, so these are resolved once rather than per primitive
         if (iris$offsetMidTexture < 0) {
-            VertexFormatDescription description = VertexFormatRegistry.instance().get(format);
-            iris$offsetMidTexture = description.getElementOffset(IrisVertexFormats.MID_TEXTURE_ELEMENT);
-            iris$offsetNormal = description.getElementOffset(VertexFormatElement.NORMAL);
-            iris$offsetTangent = description.getElementOffset(IrisVertexFormats.TANGENT_ELEMENT);
+            iris$offsetMidTexture = offsetsByElement[IrisVertexFormats.MID_TEXTURE_ELEMENT.id()];
+            iris$offsetNormal = offsetsByElement[VertexFormatElement.NORMAL.id()];
+            iris$offsetTangent = offsetsByElement[IrisVertexFormats.TANGENT_ELEMENT.id()];
         }
 
         // The vertices of a primitive are contiguous, so the pointers are derived from the one that
@@ -557,9 +561,10 @@ public abstract class MixinBufferBuilder implements VertexConsumer, BlockSensiti
     }
 
     @Override
-    public void beginBlock(short block, short renderType, int localPosX, int localPosY, int localPosZ) {
+    public void beginBlock(short block, short renderType, byte lightEmission, int localPosX, int localPosY, int localPosZ) {
         currentBlock = block;
         currentRenderType = renderType;
+        currentLightEmission = lightEmission;
         currentLocalPosX = localPosX;
         currentLocalPosY = localPosY;
         currentLocalPosZ = localPosZ;
@@ -569,6 +574,7 @@ public abstract class MixinBufferBuilder implements VertexConsumer, BlockSensiti
     public void endBlock() {
         currentBlock = -1;
         currentRenderType = -1;
+        currentLightEmission = 0;
         currentLocalPosX = 0;
         currentLocalPosY = 0;
         currentLocalPosZ = 0;
