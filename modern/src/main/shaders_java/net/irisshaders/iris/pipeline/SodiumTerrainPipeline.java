@@ -21,14 +21,18 @@ import net.irisshaders.iris.gl.state.ShaderAttributeInputs;
 import net.irisshaders.iris.pipeline.foss_transform.TransformPatcherBridge;
 import net.irisshaders.iris.pipeline.transform.ShaderPrinter;
 import net.irisshaders.iris.shaderpack.loading.ProgramId;
+import net.irisshaders.iris.shaderpack.programs.ProgramFallbackResolver;
 import net.irisshaders.iris.shaderpack.programs.ProgramSet;
 import net.irisshaders.iris.shaderpack.programs.ProgramSource;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.uniforms.CommonUniforms;
 import net.irisshaders.iris.uniforms.builtin.BuiltinReplacementUniforms;
 import net.irisshaders.iris.uniforms.custom.CustomUniforms;
+import org.embeddedt.embeddium.impl.render.chunk.terrain.TerrainRenderPass;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.IntFunction;
 
 public class SodiumTerrainPipeline {
@@ -72,7 +76,10 @@ public class SodiumTerrainPipeline {
         gbufferProgramSource.put(IrisTerrainPass.GBUFFER_SOLID, first(programSet.getGbuffersTerrainSolid(), programSet.getGbuffersTerrain(), programSet.getGbuffersTexturedLit(), programSet.getGbuffersTextured(), programSet.getGbuffersBasic()));
         gbufferProgramSource.put(IrisTerrainPass.GBUFFER_CUTOUT, first(programSet.getGbuffersTerrainCutout(), programSet.getGbuffersTerrain(), programSet.getGbuffersTexturedLit(), programSet.getGbuffersTextured(), programSet.getGbuffersBasic()));
         gbufferProgramSource.put(IrisTerrainPass.GBUFFER_TRANSLUCENT, first(programSet.getGbuffersWater(), gbufferProgramSource.get(IrisTerrainPass.GBUFFER_CUTOUT)));
-        gbufferProgramSource.put(IrisTerrainPass.SHADOW, programSet.getShadow());
+        ProgramFallbackResolver resolver = new ProgramFallbackResolver(programSet);
+        gbufferProgramSource.put(IrisTerrainPass.SHADOW, resolver.resolve(ProgramId.ShadowSolid));
+        gbufferProgramSource.put(IrisTerrainPass.SHADOW_CUTOUT, resolver.resolve(ProgramId.ShadowCutout));
+        gbufferProgramSource.put(IrisTerrainPass.SHADOW_TRANSLUCENT, resolver.resolve(ProgramId.ShadowWater));
 
 		this.programSet = programSet;
         this.passInfoMap = new EnumMap<>(IrisTerrainPass.class);
@@ -81,7 +88,7 @@ public class SodiumTerrainPipeline {
             var passInfo = new PassInfo();
             this.passInfoMap.put(pass, passInfo);
 
-            if (pass == IrisTerrainPass.SHADOW || pass == IrisTerrainPass.SHADOW_CUTOUT) {
+            if (pass.isShadow()) {
                 passInfo.framebuffer = shadowFramebuffer;
             } else {
                 var programSource = gbufferProgramSource.get(pass);
@@ -113,17 +120,22 @@ public class SodiumTerrainPipeline {
 		return Optional.empty();
 	}
 
+	private record PendingPass(String name, CompletableFuture<Map<ShaderType, String>> transformed) {}
+
 	public void patchShaders(RenderPassConfiguration<?> configuration) {
 		ShaderAttributeInputs inputs = new ShaderAttributeInputs(true, true, false, true, true);
+        Map<IrisTerrainPass, PendingPass> transforms = new EnumMap<>(IrisTerrainPass.class);
 
         for (var pass : IrisTerrainPass.values()) {
             var passInfo = passInfoMap.get(pass);
             var programId = switch (pass) {
                 case GBUFFER_TRANSLUCENT -> ProgramId.Water;
-                case SHADOW -> ProgramId.Shadow;
+                case SHADOW -> ProgramId.ShadowSolid;
+                case SHADOW_CUTOUT -> ProgramId.ShadowCutout;
+                case SHADOW_TRANSLUCENT -> ProgramId.ShadowWater;
                 default -> ProgramId.Terrain;
             };
-            var programSource = gbufferProgramSource.get(pass == IrisTerrainPass.SHADOW_CUTOUT ? IrisTerrainPass.SHADOW : pass);
+            var programSource = gbufferProgramSource.get(pass);
             if (programSource == null) {
                 Celeritas.logger().warn("Missing program source for pass {}", pass.name());
                 continue;
@@ -139,31 +151,50 @@ public class SodiumTerrainPipeline {
                 });
 
                 AlphaTest defaultPassAlpha = switch (pass) {
+                    //? if >=26.1 {
+                    /*// Vanilla's mipmap generator preserves alpha-test coverage at a 0.5 cutoff.
+                    case SHADOW_CUTOUT, GBUFFER_CUTOUT -> AlphaTests.HALF_ALPHA;
+                    case GBUFFER_TRANSLUCENT -> AlphaTests.NON_ZERO_ALPHA;
+                    *///?} else
                     case SHADOW_CUTOUT, GBUFFER_CUTOUT -> AlphaTests.ONE_TENTH_ALPHA;
                     default -> AlphaTest.ALWAYS;
                 };
 
                 passInfo.alphaTest = sources.getDirectives().getAlphaTestOverride().or(() -> Optional.of(defaultPassAlpha));
 
-                Map<ShaderType, String> transformed = TransformPatcherBridge.patchSodium(
+                AlphaTest alphaTest = passInfo.alphaTest.orElseThrow();
+                TerrainRenderPass terrainPass = pass.toTerrainPass(configuration);
+                transforms.put(pass, new PendingPass(sources.getName(), CompletableFuture.supplyAsync(() -> TransformPatcherBridge.patchSodium(
                         sources.getName(),
                         sources.getSourcesMap(),
-                        passInfo.alphaTest.orElseThrow(), inputs, parent.getTextureMap(), pass.toTerrainPass(configuration));
-
-                for (var type : ShaderType.values()) {
-                    passInfo.sources.put(type, Optional.ofNullable(transformed.get(type)));
-                }
-
-                ShaderPrinter.printProgram(sources.getName() + "_sodium_" + pass.getName()).addSources(transformed).print();
-
+                        alphaTest, inputs, parent.getTextureMap(), terrainPass), TransformPatcherBridge.EXECUTOR)));
             }, () -> {
                 passInfo.blendModeOverride = null;
                 passInfo.bufferOverrides = Collections.emptyList();
-                if (pass != IrisTerrainPass.SHADOW && pass != IrisTerrainPass.SHADOW_CUTOUT) {
+                if (!pass.isShadow()) {
                     throw new UnsupportedOperationException("Fallback vertex/fragment shaders are no longer implemented, but are needed by pass " + pass.name());
                 }
             });
         }
+
+        transforms.forEach((pass, pending) -> {
+            Map<ShaderType, String> transformed;
+            try {
+                transformed = pending.transformed().join();
+            } catch (CompletionException e) {
+                if (e.getCause() instanceof RuntimeException cause) {
+                    throw cause;
+                }
+                throw e;
+            }
+
+            var passInfo = passInfoMap.get(pass);
+            for (var type : ShaderType.values()) {
+                passInfo.sources.put(type, Optional.ofNullable(transformed.get(type)));
+            }
+
+            ShaderPrinter.printProgram(pending.name() + "_sodium_" + pass.getName()).addSources(transformed).print();
+        });
 	}
 
 	public ProgramUniforms.Builder initUniforms(int programId) {

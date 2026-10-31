@@ -9,10 +9,16 @@ import it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import lombok.Getter;
+//? if colorwheel {
+import net.irisshaders.iris.compat.flywheel.Colorwheel;
+import net.irisshaders.iris.compat.flywheel.shaderpack.ClrwlShaderProperties;
+//?}
 import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.texture.TextureDefinition;
 import net.irisshaders.iris.helpers.StringPair;
 import net.irisshaders.iris.pathways.colorspace.ColorSpace;
+import net.irisshaders.iris.pipeline.ShaderLoadTimings;
+import net.irisshaders.iris.pipeline.foss_transform.TransformPatcherBridge;
 import net.irisshaders.iris.shaderpack.error.UnsupportedFeatureFlagException;
 import net.irisshaders.iris.shaderpack.include.AbsolutePackPath;
 import net.irisshaders.iris.shaderpack.include.IncludeGraph;
@@ -55,7 +61,11 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 public class ShaderPack {
@@ -75,7 +85,13 @@ public class ShaderPack {
 	private final List<ImageInformation> irisCustomImages;
 	private final Set<FeatureFlags> activeFeatures;
 	private final Function<AbsolutePackPath, String> sourceProvider;
+	private final Consumer<AbsolutePackPath> sourcePrefetcher;
+	private final Map<AbsolutePackPath, CompletableFuture<String>> prefetchedSources = new HashMap<>();
 	private final ShaderProperties shaderProperties;
+	//? if colorwheel {
+	@Nullable
+	private final ClrwlShaderProperties clrwlProperties;
+	//?}
 	private final List<String> dimensionIds;
     @Getter
 	private Map<NamespacedId, String> dimensionMap;
@@ -240,17 +256,17 @@ public class ShaderPack {
 
 		// Set up our source provider for creating ProgramSets
 		Iterable<StringPair> finalEnvironmentDefines1 = environmentDefines;
-		this.sourceProvider = (path) -> {
+		Predicate<AbsolutePackPath> isDisabled = (path) -> {
 			String pathString = path.getPathString();
 			// Removes the first "/" in the path if present, and the file
 			// extension in order to represent the path as its program name
 			String programString = pathString.substring(pathString.indexOf("/") == 0 ? 1 : 0, pathString.lastIndexOf("."));
 
-			// Return an empty program source if the program is disabled by the current profile
-			if (disabledPrograms.contains(programString)) {
-				return null;
-			}
+			return disabledPrograms.contains(programString);
+		};
 
+		Function<AbsolutePackPath, String> preprocess = (path) -> {
+			long preprocessStart = ShaderLoadTimings.now();
 			ImmutableList<String> lines = includeProcessor.getIncludedFile(path);
 
 			if (lines == null) {
@@ -272,11 +288,64 @@ public class ShaderPack {
 			// though there exist many more (such as relocating all #extension directives and similar things)
 			String source = builder.toString();
 			source = JcppProcessor.glslPreprocessSource(source, finalEnvironmentDefines1);
+			ShaderLoadTimings.record(ShaderLoadTimings.Stage.PREPROCESSING, preprocessStart);
 
 			return source;
 		};
 
-		this.base = new ProgramSet(AbsolutePackPath.fromAbsolutePath("/" + dimensionMap.getOrDefault(new NamespacedId("*", "*"), "")), sourceProvider, shaderProperties, this);
+		Set<String> potentialStarts = Set.copyOf(potentialFileNames);
+		List<AbsolutePackPath> programFiles = graph.getNodes().keySet().stream()
+			.filter(path -> {
+				String pathString = path.getPathString();
+				return potentialStarts.contains(pathString.substring(pathString.lastIndexOf('/') + 1));
+			})
+			.toList();
+
+		this.sourcePrefetcher = (directory) -> {
+			String directoryString = directory.getPathString();
+			String prefix = directoryString.endsWith("/") ? directoryString : directoryString + "/";
+
+			for (AbsolutePackPath path : programFiles) {
+				String pathString = path.getPathString();
+
+				if (pathString.startsWith(prefix) && pathString.indexOf('/', prefix.length()) < 0 && !isDisabled.test(path)) {
+					prefetchedSources.computeIfAbsent(path, p -> CompletableFuture.supplyAsync(() -> preprocess.apply(p), TransformPatcherBridge.EXECUTOR));
+				}
+			}
+		};
+
+		this.sourceProvider = (path) -> {
+			// Return an empty program source if the program is disabled by the current profile
+			if (isDisabled.test(path)) {
+				return null;
+			}
+
+			CompletableFuture<String> prefetched = prefetchedSources.remove(path);
+
+			if (prefetched == null) {
+				return preprocess.apply(path);
+			}
+
+			try {
+				return prefetched.join();
+			} catch (CompletionException e) {
+				if (e.getCause() instanceof RuntimeException cause) {
+					throw cause;
+				}
+				throw e;
+			}
+		};
+
+		//? if colorwheel {
+		// Read before any ProgramSet is built, since each one parses its Flywheel programs against these.
+		this.clrwlProperties = Colorwheel.isFlywheelLoaded()
+			? loadProperties(root, "colorwheel.properties")
+				.map(source -> new ClrwlShaderProperties(source, shaderPackOptions, finalEnvironmentDefines1))
+				.orElseGet(ClrwlShaderProperties::new)
+			: null;
+		//?}
+
+		this.base = createProgramSet(AbsolutePackPath.fromAbsolutePath("/" + dimensionMap.getOrDefault(new NamespacedId("*", "*"), "")));
 
 		this.overrides = new HashMap<>();
 
@@ -372,6 +441,20 @@ public class ShaderPack {
 		});
 
 		return overrides;
+	}
+
+	/**
+	 * Preprocesses the directory's program files in parallel before the program set reads them one by one.
+	 */
+	private ProgramSet createProgramSet(AbsolutePackPath directory) {
+		sourcePrefetcher.accept(directory);
+
+		try {
+			return new ProgramSet(directory, sourceProvider, shaderProperties, this);
+		} finally {
+			// Files the program set didn't ask for, such as tessellation stages when the pack doesn't enable them.
+			prefetchedSources.clear();
+		}
 	}
 
 	@Nullable
@@ -518,7 +601,7 @@ public class ShaderPack {
 			if (dimensionMap.containsKey(dimension)) {
 				String name = dimensionMap.get(dimension);
 				if (dimensionIds.contains(name)) {
-					return new ProgramSet(AbsolutePackPath.fromAbsolutePath("/" + name), sourceProvider, shaderProperties, this);
+					return createProgramSet(AbsolutePackPath.fromAbsolutePath("/" + name));
 				} else {
 					CeleritasShaders.logger().error("Attempted to load dimension folder " + name + " for dimension " + dimension + ", but it does not exist!");
 					return ProgramSetInterface.Empty.INSTANCE;
@@ -566,6 +649,20 @@ public class ShaderPack {
 	public LanguageMap getLanguageMap() {
 		return languageMap;
 	}
+
+	public ShaderProperties getShaderProperties() {
+		return shaderProperties;
+	}
+
+	//? if colorwheel {
+	/**
+	 * @return the parsed {@code colorwheel.properties}, or {@code null} when Flywheel is not installed
+	 */
+	@Nullable
+	public ClrwlShaderProperties getClrwlProperties() {
+		return clrwlProperties;
+	}
+	//?}
 
 	public ShaderPackOptions getShaderPackOptions() {
 		return shaderPackOptions;

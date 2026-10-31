@@ -3,7 +3,7 @@
 # Celeritas
 
 Celeritas is a free and open-source performance & shaders mod for Minecraft clients. It is a fork of Embeddium (which itself
-was based on the last FOSS-licensed version of Sodium) and Oculus 1.7.
+was based on the last FOSS-licensed version of Sodium) and Oculus/Iris.
 
 I maintain this mod for personal use & experimentation and make the source code available for other projects and
 developers who may be interested. There is also no guarantee of active maintenance, including bugfixes
@@ -53,7 +53,7 @@ or 21 are not required, unless the underlying Minecraft version itself requires 
 
 ## License
 
-Celeritas is licensed under the Lesser GNU General Public License version 3, as it only uses code from Iris 1.7,
+Celeritas is licensed under the Lesser GNU General Public License version 3, as it only uses code from Oculus/Iris,
 Sodium 0.5.11-, and other FOSS projects.
 
 Portions of the option screen code are based on Reese's Sodium Options by FlashyReese, and are used under the terms of
@@ -72,6 +72,7 @@ Please reach out to @embeddedt on Discord if you have concerns regarding the lic
 * rdh, for leading several key improvements, including faster & better occlusion culling, better AO rendering, etc
 * douira, for researching and writing the [paper](https://douira.dev/assets/document/douira-master-thesis.pdf) on which the translucency sorting v3 implementation is based
 * grondag, for developing [bitraster](https://github.com/vram-guild/bitraster), the library we vendor for rasterized occlusion culling
+* djefrey, for developing [Colorwheel](https://github.com/djefrey/Colorwheel), which our Flywheel backend for shader packs is ported from
 * XFactHD, Pepper, and anyone else I've forgotten to mention, for providing valuable code insights
 
 [![YourKit logo](https://www.yourkit.com/images/yklogo.png)](https://www.yourkit.com/)

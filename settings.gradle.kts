@@ -83,7 +83,7 @@ pluginManagement {
 plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version("1.0.0")
     id("dev.kikugie.stonecutter") version(extra["stonecutter_version"].toString())
-    id("com.cleanroommc.cleanroomgradle.settings") version "0.17.4"
+    id("com.cleanroommc.cleanroomgradle.settings") version "0.22.0"
 }
 
 rootProject.name = "celeritas"

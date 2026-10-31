@@ -11,6 +11,9 @@ import org.embeddedt.embeddium.impl.render.chunk.fog.FogService;
 import org.embeddedt.embeddium.impl.render.chunk.shader.*;
 import org.embeddedt.embeddium.impl.render.chunk.terrain.TerrainRenderPass;
 import org.embeddedt.embeddium.impl.render.chunk.vertex.format.ChunkVertexType;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.ChunkVertexLayout;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.VertexFetchGenerator;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.VertexFetchMode;
 import org.embeddedt.embeddium.impl.render.shader.ShaderLoader;
 import org.jetbrains.annotations.Nullable;
 
@@ -61,21 +64,26 @@ public abstract class ShaderChunkRenderer implements ChunkRenderer {
 
     protected GlProgram<ChunkShaderInterface> createShader(String path, ChunkShaderOptions options) {
         ShaderConstants constants = options.constants();
+        var pass = options.pass();
+        var generatedSources = VertexFetchGenerator.sources(pass.vertexType().getLayout(),
+                pass.primitiveType().getVerticesPerPrimitive(), pass.vertexFetchMode(), this.enableLegacyGLPatches);
 
         List<GlShader> loadedShaders = new ArrayList<>();
 
         loadedShaders.add(ShaderLoader.loadShader(ShaderType.VERTEX,
-                "sodium:" + path + ".vsh", constants));
+                "sodium:" + path + ".vsh", constants, generatedSources));
 
         loadedShaders.add(ShaderLoader.loadShader(ShaderType.FRAGMENT,
-                "sodium:" + path + ".fsh", constants));
+                "sodium:" + path + ".fsh", constants, generatedSources));
 
         try {
             var builder = GlProgram.builder("sodium:chunk_shader");
             loadedShaders.forEach(builder::attachShader);
-            int i = 0;
-            for (var attr : options.pass().vertexType().getVertexFormat().getAttributes()) {
-                builder.bindAttribute(attr.getName(), i++);
+            if (pass.vertexFetchMode() == VertexFetchMode.ATTRIBUTES) {
+                int i = 0;
+                for (var attr : ChunkVertexLayout.requireAttributes(pass.vertexType().getLayout()).getAttributes()) {
+                    builder.bindAttribute(attr.getName(), i++);
+                }
             }
             if (!this.enableLegacyGLPatches) {
                 builder.bindFragmentData("fragColor", ChunkShaderBindingPoints.FRAG_COLOR);
@@ -95,7 +103,7 @@ public abstract class ShaderChunkRenderer implements ChunkRenderer {
     protected void begin(TerrainRenderPass pass) {
         pass.startDrawing();
 
-        ChunkShaderOptions options = new ChunkShaderOptions(getShaderComponents(), pass);
+        ChunkShaderOptions options = new ChunkShaderOptions(getShaderComponents(), pass, this.renderPassConfiguration.terrainSampling());
 
         this.activeProgram = this.compileProgram(options);
 
@@ -121,6 +129,7 @@ public abstract class ShaderChunkRenderer implements ChunkRenderer {
     public void delete(CommandList commandList) {
         this.programs.values().stream().filter(Objects::nonNull)
                 .forEach(GlProgram::delete);
+        this.renderPassConfiguration.terrainSampling().delete();
     }
 
     @Override

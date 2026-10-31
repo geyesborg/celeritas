@@ -146,17 +146,18 @@ val modMixinConfigs = mutableListOf("embeddium.mixins.json")
 project.extra.set("celeritasMixinConfigs", modMixinConfigs)
 
 if (generateSequence(project) { it.parent }.any { it.name == "modern" }) {
-    if (stonecutterExt?.constants?.get("settings_gui") ?: false) {
+    val platformVersionSourceDir = if((stonecutterExt?.compare(stonecutterExt.current.version, "1.21.11") ?: -1) >= 0) {
+        "postmodern"
+    } else {
+        "modern"
+    }
+    // The postmodern settings screen backend lives in postmodern_java.
+    if ((stonecutterExt?.constants?.get("settings_gui") ?: false) && platformVersionSourceDir == "modern") {
         sourceSets {
             main {
                 java.srcDir("src/main/gui_java")
             }
         }
-    }
-    val platformVersionSourceDir = if((stonecutterExt?.compare(stonecutterExt.current.version, "1.21.11") ?: -1) >= 0) {
-        "postmodern"
-    } else {
-        "modern"
     }
     sourceSets {
         main {
@@ -212,15 +213,37 @@ tasks.named<ProcessResources>("processResources") {
     val isFabric = modLoader == ModLoader.FABRIC
     val modId = rootProject.property("mod_id").toString()
     val mixinConfigs = modMixinConfigs
+    val declareAllMixinConfigs = (stonecutterExt?.compare(stonecutterExt.current.version, "26.1") ?: -1) >= 0
+    inputs.property("mixinConfigs", mixinConfigs)
+    // The shader pack Flywheel backend depends on Flywheel internals that changed in 1.0.6, and replaces Colorwheel.
+    val minFlywheelVersion = if (versionedProperty("flywheel_version") != null) "1.0.6" else null
+    inputs.property("minFlywheelVersion", minFlywheelVersion ?: "")
 
     doLast {
         val outputDir = Path.of(outputs.files.asPath)
 
-        if (isNeoForge) {
-            val modsTOML = outputDir.resolve("META-INF/mods.toml")
+        val modsTOML = outputDir.resolve("META-INF/mods.toml")
 
+        if (minFlywheelVersion != null && !isFabric && Files.exists(modsTOML)) {
+            val loaderDependency = { id: String, type: String, mandatory: Boolean, range: String ->
+                "\n\n[[dependencies.${modId}]]\nmodId = \"${id}\"\nmandatory = ${mandatory}\ntype = \"${type}\"\nversionRange = \"${range}\"\nordering = \"NONE\"\nside = \"CLIENT\""
+            }
+            modsTOML.toFile().appendText(loaderDependency("flywheel", "optional", false, "[${minFlywheelVersion},)"))
+            modsTOML.toFile().appendText(if (isNeoForge) {
+                loaderDependency("colorwheel", "incompatible", false, "*")
+            } else {
+                // Forge has no incompatible dependencies, but rejects an optional one whose range nothing satisfies.
+                loaderDependency("colorwheel", "optional", false, "(,0)")
+            })
+        }
+
+        if (isNeoForge) {
             if (Files.exists(modsTOML)) {
-                modsTOML.toFile().appendText("\n\n[[mixins]]\nconfig = \"${modId}.mixins.json\"")
+                // 26.1 no longer reads mixin configs from the jar manifest or the --mixin.config argument.
+                val declaredConfigs = if (declareAllMixinConfigs) mixinConfigs else listOf("${modId}.mixins.json")
+                for (config in declaredConfigs) {
+                    modsTOML.toFile().appendText("\n\n[[mixins]]\nconfig = \"${config}\"")
+                }
 
                 Files.copy(modsTOML, outputDir.resolve("META-INF/neoforge.mods.toml"), StandardCopyOption.REPLACE_EXISTING)
             }
@@ -233,6 +256,10 @@ tasks.named<ProcessResources>("processResources") {
                 val parse = JsonSlurper().parse(file) as MutableMap<String, Any>
 
                 parse["mixins"] = mixinConfigs.toList()
+
+                if (minFlywheelVersion != null) {
+                    parse["breaks"] = mapOf("flywheel" to "<${minFlywheelVersion}", "colorwheel" to "*")
+                }
 
                 file.writeText(JsonOutput.prettyPrint(JsonOutput.toJson(parse)))
             }

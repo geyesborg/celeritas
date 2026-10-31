@@ -56,7 +56,7 @@ configurations {
 }
 
 dependencies {
-    implementation cleanroom.userdev('0.6.10') {
+    implementation cleanroom.userdev('0.7.14-alpha') {
         accessTransformers.from(layout.projectDirectory.file('src/main/resources/META-INF/celeritas_at.cfg'))
     }
 
@@ -136,6 +136,8 @@ def reobfTsrg = layout.buildDirectory.file('mixin/reobf.tsrg')
 def mcp2srg = layout.buildDirectory.file('cleanroom_gradle/userdev/mcp2srg.tsrg')
 
 compileJava {
+    dependsOn(tasks.named('extractUserdevMcpToSrg'))
+    inputs.file(mcp2srg)
     outputs.files(refmapFile, mixinTsrg)
     def refmapPath = refmapFile.get().asFile.absolutePath
     def mixinTsrgPath = mixinTsrg.get().asFile.absolutePath

@@ -8,6 +8,8 @@ import org.embeddedt.embeddium.impl.gl.shader.uniform.GlUniformMatrix4f;
 import org.embeddedt.embeddium.impl.gl.tessellation.GlPrimitiveType;
 import org.embeddedt.embeddium.impl.render.chunk.compile.sorting.QuadPrimitiveType;
 import org.embeddedt.embeddium.impl.render.chunk.terrain.TerrainRenderPass;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.VertexFetchGenerator;
+import org.embeddedt.embeddium.impl.render.chunk.vertex.format.VertexFetchMode;
 import org.joml.Matrix4fc;
 import org.taumc.celeritas.lwjgl.MemoryStack;
 import static org.taumc.celeritas.lwjgl.LWJGLServiceProvider.LWJGL;
@@ -46,6 +48,14 @@ public class DefaultChunkShaderInterface implements ChunkShaderInterface {
         this.uniformTextures.put(ChunkShaderTextureSlot.BLOCK, context.bindUniform("u_BlockTex", GlUniformInt::new));
         if (!options.pass().hasNoLightmap()) {
             this.uniformTextures.put(ChunkShaderTextureSlot.LIGHT, context.bindUniform("u_LightTex", GlUniformInt::new));
+        }
+        if (options.pass().vertexFetchMode() == VertexFetchMode.PULLED) {
+            this.uniformTextures.put(ChunkShaderTextureSlot.VERTEX_DATA, context.bindUniform(VertexFetchGenerator.VERTEX_DATA_SAMPLER, GlUniformInt::new));
+        }
+
+        var edgeMaskUniform = context.bindUniformIfPresent("u_AtlasEdgeMask", GlUniformInt::new);
+        if (edgeMaskUniform != null) {
+            this.uniformTextures.put(ChunkShaderTextureSlot.ATLAS_EDGE_MASK, edgeMaskUniform);
         }
 
         this.components = options.components().stream().map(c -> c.create(context, environment)).toList();

@@ -34,14 +34,18 @@ public final class StandardOptions {
         public static final OptionIdentifier<Void> GUI_SCALE = OptionIdentifier.create("minecraft", "gui_scale");
         public static final OptionIdentifier<Void> FULLSCREEN = OptionIdentifier.create("minecraft", "fullscreen");
         public static final OptionIdentifier<Void> FULLSCREEN_RESOLUTION = OptionIdentifier.create("minecraft", "fullscreen_resolution");
+        public static final OptionIdentifier<Void> EXCLUSIVE_FULLSCREEN = OptionIdentifier.create("minecraft", "exclusive_fullscreen");
         public static final OptionIdentifier<Void> VSYNC = OptionIdentifier.create("minecraft", "vsync");
         public static final OptionIdentifier<Void> MAX_FRAMERATE = OptionIdentifier.create("minecraft", "max_frame_rate");
         public static final OptionIdentifier<Void> VIEW_BOBBING = OptionIdentifier.create("minecraft", "view_bobbing");
         public static final OptionIdentifier<Void> INACTIVITY_FPS_LIMIT = OptionIdentifier.create("minecraft", "inactivity_fps_limit");
         public static final OptionIdentifier<Void> ATTACK_INDICATOR = OptionIdentifier.create("minecraft", "attack_indicator");
         public static final OptionIdentifier<Void> AUTOSAVE_INDICATOR = OptionIdentifier.create("minecraft", "autosave_indicator");
+        public static final OptionIdentifier<Void> MENU_BACKGROUND_BLUR = OptionIdentifier.create("minecraft", "menu_background_blur");
         public static final OptionIdentifier<Void> GRAPHICS_MODE = OptionIdentifier.create("minecraft", "graphics_mode");
+        public static final OptionIdentifier<Void> IMPROVED_TRANSPARENCY = OptionIdentifier.create("minecraft", "improved_transparency");
         public static final OptionIdentifier<Void> CLOUDS = OptionIdentifier.create("minecraft", "clouds");
+        public static final OptionIdentifier<Void> CLOUD_RANGE = OptionIdentifier.create("minecraft", "cloud_range");
         public static final OptionIdentifier<Void> WEATHER = OptionIdentifier.create("minecraft", "weather");
         public static final OptionIdentifier<Void> LEAVES = OptionIdentifier.create("minecraft", "leaves");
         public static final OptionIdentifier<Void> PARTICLES = OptionIdentifier.create("minecraft", "particles");
@@ -50,7 +54,10 @@ public final class StandardOptions {
         public static final OptionIdentifier<Void> ENTITY_DISTANCE = OptionIdentifier.create("minecraft", "entity_distance");
         public static final OptionIdentifier<Void> ENTITY_SHADOWS = OptionIdentifier.create("minecraft", "entity_shadows");
         public static final OptionIdentifier<Void> VIGNETTE = OptionIdentifier.create("minecraft", "vignette");
+        public static final OptionIdentifier<Void> CHUNK_FADE = OptionIdentifier.create("minecraft", "chunk_fade");
         public static final OptionIdentifier<Void> MIPMAP_LEVEL = OptionIdentifier.create("minecraft", "mipmap_levels");
+        public static final OptionIdentifier<Void> TEXTURE_FILTERING = OptionIdentifier.create("minecraft", "texture_filtering");
+        public static final OptionIdentifier<Void> MAX_ANISOTROPY = OptionIdentifier.create("minecraft", "max_anisotropy");
         public static final OptionIdentifier<Void> CHUNK_UPDATE_THREADS = OptionIdentifier.create(EMBEDDIUM_MOD_ID, "chunk_update_threads");
         public static final OptionIdentifier<Void> DEFFER_CHUNK_UPDATES = OptionIdentifier.create(EMBEDDIUM_MOD_ID, "defer_chunk_updates");
         public static final OptionIdentifier<Void> BLOCK_FACE_CULLING = OptionIdentifier.create(EMBEDDIUM_MOD_ID, "block_face_culling");
@@ -68,6 +75,7 @@ public final class StandardOptions {
         public static final OptionIdentifier<Void> USE_FASTER_CLOUDS = OptionIdentifier.create(EMBEDDIUM_MOD_ID, "use_faster_clouds");
         public static final OptionIdentifier<Void> ASYNC_GRAPH_SEARCH = OptionIdentifier.create(EMBEDDIUM_MOD_ID, "async_graph_search");
         public static final OptionIdentifier<Void> CHUNK_FADE_IN_DURATION = OptionIdentifier.create(EMBEDDIUM_MOD_ID, "chunk_fade_in_duration");
+        public static final OptionIdentifier<Void> RGSS_TEXTURE_FILTERING = OptionIdentifier.create(EMBEDDIUM_MOD_ID, "rgss_texture_filtering");
         public static final OptionIdentifier<Void> RASTER_OCCLUSION_CULLING = OptionIdentifier.create(EMBEDDIUM_MOD_ID, "raster_occlusion_culling");
     }
 }

@@ -13,6 +13,7 @@ import net.irisshaders.iris.gl.texture.PixelFormat;
 import net.irisshaders.iris.gl.texture.PixelType;
 import net.irisshaders.iris.gl.uniform.UniformUpdateFrequency;
 import net.irisshaders.iris.pathways.FullScreenQuadRenderer;
+import net.irisshaders.iris.targets.VanillaTargets;
 import org.apache.commons.io.IOUtils;
 import org.joml.Vector2i;
 import org.joml.Vector4i;
@@ -208,31 +209,30 @@ public class FsrUpscaler {
 		this.maxCoord.set(width - 1, height - 1);
 		this.sharpnessStops = sharpnessStops;
 
-		RenderSystem.disableBlend();
-		RenderSystem.depthMask(false);
-		RenderSystem.colorMask(true, true, true, true);
+		GlStateManager._disableBlend();
+		GlStateManager._depthMask(false);
+		IrisRenderSystem.colorMask(true, true, true, true);
 
 		FullScreenQuadRenderer.INSTANCE.begin();
 
 		// EASU: the reduced-resolution world image up to output resolution.
-		this.inputTexture = source.getColorTextureId();
-		RenderSystem.viewport(0, 0, width, height);
+		this.inputTexture = VanillaTargets.colorTexture(source);
+		GlStateManager._viewport(0, 0, width, height);
 		easuFramebuffer.bind();
 		easuProgram.use();
 		FullScreenQuadRenderer.INSTANCE.renderQuad();
 
-		// RCAS: sharpen the result into the destination. bindWrite(true) restores the
-		// destination's own viewport for us.
+		// RCAS: sharpen the result into the destination, restoring the destination's own viewport.
 		this.inputTexture = easuTexture;
-		destination.bindWrite(true);
+		VanillaTargets.bind(destination, true);
 		rcasProgram.use();
 		FullScreenQuadRenderer.INSTANCE.renderQuad();
 
 		FullScreenQuadRenderer.INSTANCE.end();
 
 		Program.unbind();
-		RenderSystem.depthMask(true);
-		RenderSystem.activeTexture(GL13C.GL_TEXTURE0);
+		GlStateManager._depthMask(true);
+		GlStateManager._activeTexture(GL13C.GL_TEXTURE0);
 	}
 
 	public void destroy() {

@@ -18,12 +18,12 @@ import net.irisshaders.iris.gl.program.Program;
 import net.irisshaders.iris.gl.program.ProgramBuilder;
 import net.irisshaders.iris.gl.program.ProgramSamplers;
 import net.irisshaders.iris.gl.program.ProgramUniforms;
+import net.irisshaders.iris.gl.shader.ProgramCreator;
 import net.irisshaders.iris.gl.state.FogMode;
 import net.irisshaders.iris.gl.texture.TextureAccess;
 import net.irisshaders.iris.pathways.FullScreenQuadRenderer;
+import net.irisshaders.iris.pipeline.PendingPrograms;
 import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
-import net.irisshaders.iris.pipeline.foss_transform.TransformPatcherBridge;
-import net.irisshaders.iris.pipeline.transform.ShaderPrinter;
 import net.irisshaders.iris.samplers.IrisImages;
 import net.irisshaders.iris.samplers.IrisSamplers;
 import net.irisshaders.iris.shaderpack.FilledIndirectPointer;
@@ -38,7 +38,6 @@ import net.irisshaders.iris.uniforms.CommonUniforms;
 import net.irisshaders.iris.uniforms.FrameUpdateNotifier;
 import net.irisshaders.iris.uniforms.custom.CustomUniforms;
 import net.minecraft.client.Minecraft;
-import org.embeddedt.embeddium.impl.gl.shader.ShaderType;
 import org.lwjgl.opengl.GL15C;
 import org.lwjgl.opengl.GL20C;
 import org.lwjgl.opengl.GL30C;
@@ -60,11 +59,13 @@ public class ShadowCompositeRenderer {
 	private final Object2ObjectMap<String, TextureAccess> irisCustomTextures;
 	private final WorldRenderingPipeline pipeline;
 	private final Set<GlImage> irisCustomImages;
+	private final PendingPrograms pendingPrograms;
 
 	public ShadowCompositeRenderer(WorldRenderingPipeline pipeline, PackDirectives packDirectives, ProgramSource[] sources, ComputeSource[][] computes, ShadowRenderTargets renderTargets, ShaderStorageBufferHolder holder,
 								   TextureAccess noiseTexture, FrameUpdateNotifier updateNotifier,
-								   Object2ObjectMap<String, TextureAccess> customTextureIds, Set<GlImage> customImages, ImmutableMap<Integer, Boolean> explicitPreFlips, Object2ObjectMap<String, TextureAccess> irisCustomTextures, CustomUniforms customUniforms) {
+								   Object2ObjectMap<String, TextureAccess> customTextureIds, Set<GlImage> customImages, ImmutableMap<Integer, Boolean> explicitPreFlips, Object2ObjectMap<String, TextureAccess> irisCustomTextures, CustomUniforms customUniforms, PendingPrograms pendingPrograms) {
 		this.pipeline = pipeline;
+		this.pendingPrograms = pendingPrograms;
 		this.noiseTexture = noiseTexture;
 		this.updateNotifier = updateNotifier;
 		this.renderTargets = renderTargets;
@@ -174,7 +175,7 @@ public class ShadowCompositeRenderer {
 	}
 
 	public void renderAll() {
-		RenderSystem.disableBlend();
+		GlStateManager._disableBlend();
 
 		FullScreenQuadRenderer.INSTANCE.begin();
 
@@ -201,7 +202,7 @@ public class ShadowCompositeRenderer {
 			}
 
 			if (!renderPass.mipmappedBuffers.isEmpty()) {
-				RenderSystem.activeTexture(GL15C.GL_TEXTURE0);
+				GlStateManager._activeTexture(GL15C.GL_TEXTURE0);
 
 				for (int index : renderPass.mipmappedBuffers) {
 					setupMipmapping(renderTargets.get(index), renderPass.stageReadsFromAlt.contains(index));
@@ -212,7 +213,7 @@ public class ShadowCompositeRenderer {
 			float scaledHeight = renderTargets.getResolution() * renderPass.viewportScale.scale();
 			int beginWidth = (int) (renderTargets.getResolution() * renderPass.viewportScale.viewportX());
 			int beginHeight = (int) (renderTargets.getResolution() * renderPass.viewportScale.viewportY());
-			RenderSystem.viewport(beginWidth, beginHeight, (int) scaledWidth, (int) scaledHeight);
+			GlStateManager._viewport(beginWidth, beginHeight, (int) scaledWidth, (int) scaledHeight);
 
 			renderPass.framebuffer.bind();
 			renderPass.program.use();
@@ -235,7 +236,7 @@ public class ShadowCompositeRenderer {
 			}
 		}
 
-		RenderSystem.activeTexture(GL15C.GL_TEXTURE0);
+		GlStateManager._activeTexture(GL15C.GL_TEXTURE0);
 	}
 
 	// TODO: Don't just copy this from DeferredWorldRenderingPipeline
@@ -243,20 +244,13 @@ public class ShadowCompositeRenderer {
 								  ShadowRenderTargets targets) {
 		// TODO: Properly handle empty shaders
         Preconditions.checkArgument(source.isValid());
-		Map<ShaderType, String> transformed = TransformPatcherBridge.patchComposite(
-			source.getName(),
-			source.getSourcesMap(), TextureStage.SHADOWCOMP, pipeline.getTextureMap());
-		String vertex = transformed.get(ShaderType.VERTEX);
-		String geometry = transformed.get(ShaderType.GEOMETRY);
-		String fragment = transformed.get(ShaderType.FRAGMENT);
-		ShaderPrinter.printProgram(source.getName()).addSources(transformed).print();
+		ProgramCreator.Submitted submitted = pendingPrograms.takeComposite(source, TextureStage.SHADOWCOMP);
 
 		Objects.requireNonNull(flipped);
 		ProgramBuilder builder;
 
 		try {
-			builder = ProgramBuilder.begin(source.getName(), vertex, geometry, fragment,
-				IrisSamplers.COMPOSITE_RESERVED_TEXTURE_UNITS);
+			builder = ProgramBuilder.finish(submitted, IrisSamplers.COMPOSITE_RESERVED_TEXTURE_UNITS);
 		} catch (RuntimeException e) {
 			// TODO: Better error handling
 			throw new RuntimeException("Shader compilation failed for shadow composite " + source.getName() + "!", e);
@@ -292,11 +286,7 @@ public class ShadowCompositeRenderer {
 				ProgramBuilder builder;
 
 				try {
-					String transformed = TransformPatcherBridge.patchCompute(source.getName(), source.getSource().orElse(null), TextureStage.SHADOWCOMP, pipeline.getTextureMap());
-
-					ShaderPrinter.printProgram(source.getName()).addSource(ShaderType.COMPUTE, transformed).print();
-
-					builder = ProgramBuilder.beginCompute(source.getName(), transformed, IrisSamplers.COMPOSITE_RESERVED_TEXTURE_UNITS);
+					builder = ProgramBuilder.finish(pendingPrograms.takeCompute(source, TextureStage.SHADOWCOMP), IrisSamplers.COMPOSITE_RESERVED_TEXTURE_UNITS);
 				} catch (RuntimeException e) {
 					// TODO: Better error handling
 					throw new RuntimeException("Shader compilation failed for shadowcomp compute " + source.getName() + "!", e);

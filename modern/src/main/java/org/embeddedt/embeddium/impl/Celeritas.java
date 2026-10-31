@@ -92,6 +92,9 @@ public class Celeritas /*? if fabric {*/ /*implements ClientModInitializer *//*?
             MixinAuditUtil.auditAndExit();
         }
 
+        //? if neoforge && settings_gui
+        //ModList.get().getModContainerById(MODID).get().registerExtensionPoint(net.neoforged.neoforge.client.gui.IConfigScreenFactory.class, (container, screen) -> new org.embeddedt.embeddium.impl.gui.modern.EmbeddiumVideoOptionsScreen(screen));
+
         //? if forge {
         IEventBus mainEventBus = MinecraftForge.EVENT_BUS;
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
@@ -120,12 +123,29 @@ public class Celeritas /*? if fabric {*/ /*implements ClientModInitializer *//*?
             event.includeInProfile(rendererInfo,
                     net.minecraft.client.gui.components.debug.DebugScreenProfile.DEFAULT,
                     net.minecraft.client.gui.components.debug.DebugScreenEntryStatus.IN_OVERLAY);
+
+            var nativeMemory = ResourceLocationUtil.make(MODID, "native_memory");
+            event.register(nativeMemory, (displayer, level, clientChunk, serverChunk) -> {
+                long used = java.lang.management.ManagementFactory.getMemoryMXBean().getNonHeapMemoryUsage().getUsed()
+                        + org.embeddedt.embeddium.impl.common.util.NativeBuffer.getTotalAllocated();
+                displayer.addToGroup(net.minecraft.client.gui.components.debug.DebugEntryMemory.GROUP,
+                        "Off-Heap: +" + org.embeddedt.embeddium.impl.common.util.MathUtil.toMib(used) + "MB");
+            });
+            event.includeInProfile(nativeMemory,
+                    net.minecraft.client.gui.components.debug.DebugScreenProfile.DEFAULT,
+                    net.minecraft.client.gui.components.debug.DebugScreenEntryStatus.IN_OVERLAY);
         });
         *///?}
+
+        //? if shaders && >=26.1
+        //modEventBus.addListener(net.irisshaders.iris.IrisDebugEntries::register);
 
         // TODO remove
         //? if shaders {
         modEventBus.addListener((RegisterKeyMappingsEvent ev) -> {
+            net.irisshaders.iris.Iris.createKeybinds();
+            //? if >=26.1
+            //ev.registerCategory(net.irisshaders.iris.Iris.KEYBIND_CATEGORY);
             ev.register(net.irisshaders.iris.Iris.reloadKeybind);
             ev.register(net.irisshaders.iris.Iris.shaderpackScreenKeybind);
             ev.register(net.irisshaders.iris.Iris.toggleShadersKeybind);
